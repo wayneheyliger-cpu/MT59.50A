@@ -38,7 +38,7 @@ input double  BreakEvenPlusPips     = 10;
 
 input double  HedgeLotMultiplier    = 2.0;
 
-// Drawdown Protection (user-configurable)
+// Drawdown Protection (user-configurable): if equity drops this % below peak, all positions are force-closed and trading stops
 input double  MaxDrawdownPercent    = 15.0;
 
 // Debug toggle
