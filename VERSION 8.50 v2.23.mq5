@@ -316,6 +316,12 @@ bool OpenTrade(const ENUM_ORDER_TYPE type, double lots, bool isSecond = false)
 bool ModifyPositionSL(ulong ticket, double newSL)
 {
    if(!PositionSelectByTicket(ticket)) return false;
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double stopLevel = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if(posType == POSITION_TYPE_BUY  && newSL >= bid - stopLevel) return false;
+   if(posType == POSITION_TYPE_SELL && newSL <= ask + stopLevel) return false;
    double tp = PositionGetDouble(POSITION_TP);
    MqlTradeRequest req={}; MqlTradeResult res={};
    req.action = TRADE_ACTION_SLTP;
