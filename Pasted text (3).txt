@@ -1,0 +1,34 @@
+2026.04.07 11:38:59.201	7 upgraded double hedge (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double] ORDER_TYPE_BUY opened (10.00) SL/TP set
+2026.04.07 11:38:59.201	7 upgraded double hedge (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double] Hedge opened against ticket 2693403
+2026.04.07 11:39:00.350	7 upgraded double hedge (XAUUSD,M1)	Closed FIRST (after second candle)
+2026.04.07 11:39:00.350	7 upgraded double hedge (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double] Untracked t=2693403
+2026.04.07 11:39:00.358	7 upgraded double hedge (XAUUSD,M1)	array out of range in '7 upgraded double hedge.mq5' (597,22)
+2026.04.07 15:06:55.039	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] Init v2.22
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD][TF=PERIOD_M1] Track open ticket=2728137 vol=0.06 type=1 second=N openCandle=2026.04.07 22:05
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] ORDER_TYPE_SELL opened (0.06) SL/TP set
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	MA_Crossover_EA_Hedge_Double XAUUSD -> SELL signal
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=0 deal=0 order=2728137 position=0 price=0.00000 volume=0.06 ret=0
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=6 deal=2167096 order=2728137 position=2728137 price=4663.90000 volume=0.06 ret=0
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=2 deal=0 order=2728137 position=2728137 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:06:55.234	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=3 deal=0 order=2728137 position=2728137 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD][TF=PERIOD_M1] Track open ticket=2728138 vol=0.12 type=0 second=Y openCandle=2026.04.07 22:05
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] ORDER_TYPE_BUY opened (0.12) SL/TP set
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] Hedge opened against ticket 2728137
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=0 deal=0 order=2728138 position=0 price=0.00000 volume=0.12 ret=0
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=6 deal=2167097 order=2728138 position=2728138 price=4664.23000 volume=0.12 ret=0
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=2 deal=0 order=2728138 position=2728138 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:06:55.422	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=3 deal=0 order=2728138 position=2728138 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:07:00.282	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] Closed ticket=2728138 reason=Closed SECOND (first profitable at candle close) profit=-8.28
+2026.04.07 15:07:00.282	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD][TF=PERIOD_M1] Untracked ticket=2728138
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] Closed ticket=2728137 reason=Closed FIRST (after next candle of second trade) profit=0.78
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD][TF=PERIOD_M1] Untracked ticket=2728137
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=0 deal=0 order=2728146 position=2728138 price=0.00000 volume=0.12 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=6 deal=2167101 order=2728146 position=2728138 price=4663.54000 volume=0.12 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=2 deal=0 order=2728146 position=2728138 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=3 deal=0 order=2728146 position=2728138 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=0 deal=0 order=2728147 position=2728137 price=0.00000 volume=0.06 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=6 deal=2167102 order=2728147 position=2728137 price=4663.77000 volume=0.06 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=2 deal=0 order=2728147 position=2728137 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:07:00.348	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] TradeTransaction type=3 deal=0 order=2728147 position=2728137 price=0.00000 volume=0.00 ret=0
+2026.04.07 15:08:30.937	MA_Crossover_EA_Fortified_v2_22_diagnostics - Copy (XAUUSD,M1)	[MA_Crossover_EA_Hedge_Double][XAUUSD] Deinit reason=1 (REASON_REMOVE)
+2026.04.07 15:11:50.505	7 upgraded double hedge (XAUUSD,M1)	MA_Crossover_EA_Hedge_Double: Init v2.19
