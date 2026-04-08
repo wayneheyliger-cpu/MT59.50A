@@ -660,6 +660,8 @@ for(int i=0;i<ArraySize(trackedTickets);i++)
 
    if(closedCandle <= trackedOpenCandle[i]) continue;
 
+   trackedOpenCandle[i] = LONG_MAX; // mark before any UntrackPosition call shifts the array
+
    for(int j=0;j<ArraySize(trackedTickets);j++)
    {
       if(trackedIsSecond[j]) continue;
@@ -676,8 +678,6 @@ for(int i=0;i<ArraySize(trackedTickets);i++)
          }
       }
    }
-
-   trackedOpenCandle[i] = LONG_MAX;
 }
 
    if(CopyBuffer(FastMAHandle,0,0,3,FastMA)<3) return;
