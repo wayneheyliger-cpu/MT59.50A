@@ -882,9 +882,25 @@ void CloseNegativeTrades()
       if(!PositionSelectByTicket(t)) continue;
       if(PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
       if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+
+      // BUG 1 FIX: Never EOD-close a hedge/recovery trade — the recovery
+      // mechanism will handle it when the primary recovers or closes.
+      if(IsHedgePosition(t)) continue;
+
+      // BUG 1 FIX: Never EOD-close a primary that currently has an active
+      // hedge running against it. Let the recovery mechanism do its job.
+      bool hasActiveHedge = false;
+      for(int k=0;k<ArraySize(trackedTickets);k++)
+         if(trackedIsSecond[k] && trackedParentTicket[k]==t && PositionSelectByTicket(trackedTickets[k]))
+            { hasActiveHedge=true; break; }
+      if(hasActiveHedge) continue;
+
       if(PositionGetDouble(POSITION_PROFIT) < 0.0)
       {
-         trade.PositionClose(t);
+         if(trade.PositionClose(t))
+            PrintFormat("[%s] Closed negative trade at EOD (ticket=%I64u profit=%.2f)", EA_Name, t, PositionGetDouble(POSITION_PROFIT));
+         else
+            PrintFormat("[%s] Failed to close negative trade at EOD (ticket=%I64u)", EA_Name, t);
          UntrackPosition(t);
       }
    }
