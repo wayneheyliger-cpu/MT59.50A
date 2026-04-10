@@ -185,7 +185,7 @@ int OnInit()
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
 
-   if(MAFastPeriod < 2 || MASlowPeriod <= MAFastPeriod || ATR_Period < 1 || Bars(_Symbol,_Period) < MASlowPeriod + 10)
+   if(MAFastPeriod < 2 || MASlowPeriod <= MAFastPeriod || ATR_Period < 1)
    {
       Print("ERROR: Invalid settings");
       return(INIT_FAILED);
@@ -412,7 +412,7 @@ void ManageHedgeRecovery()
          if(!PositionSelectByTicket(primaryTkt)) continue;
 
          double openPx  = PositionGetDouble(POSITION_PRICE_OPEN);
-         int    primType = (int)PositionGetInteger(POSITION_TYPE);
+         ENUM_POSITION_TYPE primType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
          double mktPx   = (primType == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                                                            : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          double pipProfit = (primType == POSITION_TYPE_BUY) ? (mktPx - openPx) : (openPx - mktPx);
