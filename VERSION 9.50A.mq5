@@ -185,9 +185,19 @@ int OnInit()
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
 
-   if(MAFastPeriod < 2 || MASlowPeriod <= MAFastPeriod || ATR_Period < 1)
+   if(MAFastPeriod < 2)
    {
-      Print("ERROR: Invalid settings");
+      Print("ERROR: MAFastPeriod must be >= 2 (current value: ",MAFastPeriod,"). Period of 1 is not valid.");
+      return(INIT_FAILED);
+   }
+   if(MASlowPeriod <= MAFastPeriod)
+   {
+      Print("ERROR: MASlowPeriod (",MASlowPeriod,") must be greater than MAFastPeriod (",MAFastPeriod,").");
+      return(INIT_FAILED);
+   }
+   if(ATR_Period < 1)
+   {
+      Print("ERROR: ATR_Period must be >= 1 (current value: ",ATR_Period,").");
       return(INIT_FAILED);
    }
 
