@@ -57,7 +57,7 @@ input double HedgeLotMultiplier      = 1.30;
 input bool   UseSessionFilter        = true;
 input int    LondonOpenHour          = 8;
 input int    NYCloseHour             = 22;
-input bool   CloseNegativeAtEndOfDay = true;
+
 
 input bool   DebugMode               = true;
 
@@ -68,6 +68,7 @@ input double HedgeTriggerATRMult          = 0.50;
 
 input bool   CloseHedgeOnlyOnBasketProfit = true;
 input double BasketCloseProfitMoney       = 5.0;
+input double MinProfitPipsToCloseRecovery = 2.0; // Primary must be at least this many pips positive before recovery is auto-closed
 
 input int    MaxHedgesPerPrimaryTrade     = 1;
 
@@ -395,6 +396,47 @@ void ManageHedgeRecovery()
          }
       }
    }
+
+   // AUTO-CLOSE RECOVERY WHEN PRIMARY RETURNS TO PROFIT
+   // When the primary is at least MinProfitPipsToCloseRecovery pips positive,
+   // close the linked recovery immediately — prevents spread-noise churn and
+   // stops the recovery leg from bleeding while the primary is winning.
+   if(MinProfitPipsToCloseRecovery > 0.0)
+   {
+      double minPips = MinProfitPipsToCloseRecovery * PipPoint();
+      for(int i=0; i<ArraySize(trackedTickets); i++)
+      {
+         if(trackedIsSecond[i]) continue; // look at primaries only
+
+         ulong primaryTkt = trackedTickets[i];
+         if(!PositionSelectByTicket(primaryTkt)) continue;
+
+         double openPx  = PositionGetDouble(POSITION_PRICE_OPEN);
+         int    primType = (int)PositionGetInteger(POSITION_TYPE);
+         double mktPx   = (primType == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                                           : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         double pipProfit = (primType == POSITION_TYPE_BUY) ? (mktPx - openPx) : (openPx - mktPx);
+         if(pipProfit < minPips) continue; // not sufficiently positive yet
+
+         // Primary is sufficiently positive — close its linked recovery
+         for(int j=ArraySize(trackedTickets)-1; j>=0; j--)
+         {
+            if(!trackedIsSecond[j]) continue;
+            if(trackedParentTicket[j] != primaryTkt) continue;
+
+            ulong recTkt = trackedTickets[j];
+            if(PositionSelectByTicket(recTkt))
+            {
+               if(trade.PositionClose(recTkt))
+               {
+                  PrintFormat("[%s] Auto-closed recovery %I64u — primary %I64u returned to profit (%.1f pips)",
+                              EA_Name, recTkt, primaryTkt, pipProfit / PipPoint());
+                  UntrackPosition(recTkt);
+               }
+            }
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -420,17 +462,6 @@ void OnTick()
       buyCount = 0; sellCount = 0;
       cooldownBarsRemaining = CooldownCandles;
       return;
-   }
-
-   if(CloseNegativeAtEndOfDay && UseSessionFilter)
-   {
-      MqlDateTime tm; TimeToStruct(TimeCurrent(), tm);
-      static int lastEODDay = -1;
-      if(tm.hour == NYCloseHour && tm.day != lastEODDay)
-      {
-         CloseNegativeTrades();
-         lastEODDay = tm.day;
-      }
    }
 
    for(int idx=ArraySize(trackedTickets)-1; idx>=0; idx--)
@@ -871,39 +902,6 @@ bool IsTradingSession()
    if(LondonOpenHour < NYCloseHour)
       return (tm.hour >= LondonOpenHour && tm.hour < NYCloseHour);
    return (tm.hour >= LondonOpenHour || tm.hour < NYCloseHour);
-}
-
-void CloseNegativeTrades()
-{
-   for(int i=PositionsTotal()-1;i>=0;i--)
-   {
-      ulong t=PositionGetTicket(i);
-      if(t==0) continue;
-      if(!PositionSelectByTicket(t)) continue;
-      if(PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
-      if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-
-      // BUG 1 FIX: Never EOD-close a hedge/recovery trade — the recovery
-      // mechanism will handle it when the primary recovers or closes.
-      if(IsHedgePosition(t)) continue;
-
-      // BUG 1 FIX: Never EOD-close a primary that currently has an active
-      // hedge running against it. Let the recovery mechanism do its job.
-      bool hasActiveHedge = false;
-      for(int k=0;k<ArraySize(trackedTickets);k++)
-         if(trackedIsSecond[k] && trackedParentTicket[k]==t && PositionSelectByTicket(trackedTickets[k]))
-            { hasActiveHedge=true; break; }
-      if(hasActiveHedge) continue;
-
-      if(PositionGetDouble(POSITION_PROFIT) < 0.0)
-      {
-         if(trade.PositionClose(t))
-            PrintFormat("[%s] Closed negative trade at EOD (ticket=%I64u profit=%.2f)", EA_Name, t, PositionGetDouble(POSITION_PROFIT));
-         else
-            PrintFormat("[%s] Failed to close negative trade at EOD (ticket=%I64u)", EA_Name, t);
-         UntrackPosition(t);
-      }
-   }
 }
 
 double ComputeRiskLots(double sl_pips)
