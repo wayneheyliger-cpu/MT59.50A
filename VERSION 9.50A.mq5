@@ -24,6 +24,7 @@ input ENUM_APPLIED_PRICE MASlowPrice    = PRICE_CLOSE;
 
 input int    InpMAFastPeriod         = 5;
 input int    InpMASlowPeriod         = 100;
+input double MinMASepEntryPips       = 0.0;   // Min fast/slow MA separation to allow entry (0 = disabled)
 
 input int    InpATR_Period           = 14;
 input double InpATR_SL_Mult          = 3.0;
@@ -503,6 +504,18 @@ void OnTick()
    if(CountOpenPositions() == 0)
    {
       if(sig == SIGNAL_NEUTRAL) return;
+
+      // MA separation filter: skip entry if fast/slow MAs are too close (consolidation)
+      if(MinMASepEntryPips > 0.0)
+      {
+         double pip = (SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) % 2 == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_POINT) * 10.0 : SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+         double maSepPips = MathAbs(FastMA[1] - SlowMA[1]) / pip;
+         if(maSepPips < MinMASepEntryPips)
+         {
+            if(DebugMode) PrintFormat("[%s] Entry blocked: MA separation too small (%.1f pips < %.1f required)", EA_Name, maSepPips, MinMASepEntryPips);
+            return;
+         }
+      }
 
       double sl_pips = SL_Pips_From_ATR();
       double lots = ComputeRiskLots(sl_pips);
