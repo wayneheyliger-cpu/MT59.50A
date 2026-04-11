@@ -78,6 +78,14 @@ input double MinMAGapPips                 = 10.0;
 
 input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
+//=== RECOVERY/HEDGE TRADE PROTECTION =================================
+input double HedgeTPPips                = 0.0;   // Fixed TP on hedge trade in pips (0 = disabled)
+input double HedgeBreakEvenTriggerPips  = 0.0;   // Move hedge SL to BE after this many pips profit (0 = disabled)
+input double HedgeBreakEvenPlusPips     = 5.0;   // Lock in this many extra pips when BE triggers
+input double HedgeTrailStartPips        = 0.0;   // Start trailing hedge after this many pips profit (0 = disabled)
+input double HedgeTrailDistancePips     = 15.0;  // Trailing distance for hedge (pips)
+input double HedgeTrailStepPips         = 3.0;   // Min step before moving hedge trail SL (pips)
+
 //=== POST-PRIMARY-CLOSE HEDGE MANAGEMENT ============================
 input bool   CloseHedgeImmediatelyAfterPrimarySL = false;
 input bool   UseAggressiveTrailAfterPrimarySL    = true;
@@ -613,7 +621,53 @@ void TrailingAndBreakeven()
          useAggTrail = trackedPostSLTrail[idxTracked];
 
       if(isHedge && !useAggTrail)
+      {
+         // Apply hedge-specific BE and trailing if configured
+         bool hedgeNeedsWork = (HedgeBreakEvenTriggerPips > 0.0 || HedgeTrailStartPips > 0.0);
+         if(!hedgeNeedsWork) continue;
+
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double currentSL = PositionGetDouble(POSITION_SL);
+         ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         double pip = PipPoint();
+         double price = (type == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                                    : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         double profitPips = (type == POSITION_TYPE_BUY) ? (price - openPrice) / pip
+                                                         : (openPrice - price) / pip;
+
+         if(HedgeBreakEvenTriggerPips > 0.0 && profitPips >= HedgeBreakEvenTriggerPips)
+         {
+            double newSL = (type == POSITION_TYPE_BUY) ? openPrice + HedgeBreakEvenPlusPips * pip
+                                                       : openPrice - HedgeBreakEvenPlusPips * pip;
+            if(currentSL == 0.0 || (type == POSITION_TYPE_BUY && newSL > currentSL)
+                                 || (type == POSITION_TYPE_SELL && newSL < currentSL))
+               ModifyPositionSL(ticket, newSL);
+         }
+
+         if(HedgeTrailStartPips > 0.0 && profitPips >= HedgeTrailStartPips)
+         {
+            double trailDistance = HedgeTrailDistancePips * pip;
+            double step          = HedgeTrailStepPips * pip;
+            double newSL         = 0.0;
+            bool   doModify      = false;
+            currentSL = PositionGetDouble(POSITION_SL); // re-read in case BE just modified it
+
+            if(type == POSITION_TYPE_BUY)
+            {
+               newSL = price - trailDistance;
+               if(currentSL == 0.0 || newSL > currentSL + step) doModify = true;
+            }
+            else
+            {
+               newSL = price + trailDistance;
+               if(currentSL == 0.0 || newSL < currentSL - step) doModify = true;
+            }
+
+            if(doModify) ModifyPositionSL(ticket, newSL);
+         }
+
          continue;
+      }
 
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double currentSL = PositionGetDouble(POSITION_SL);
@@ -716,7 +770,9 @@ bool OpenTrade(const ENUM_ORDER_TYPE type, double lotsParam, bool isHedge=false,
    if(isHedge)
    {
       sl = 0.0;
-      tp = 0.0;
+      tp = (HedgeTPPips > 0.0) ? ((type == ORDER_TYPE_BUY) ? price + HedgeTPPips * pip
+                                                            : price - HedgeTPPips * pip)
+                                : 0.0;
    }
 
    sl = NormalizeDouble(sl, _Digits);
