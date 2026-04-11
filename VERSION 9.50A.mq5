@@ -1,16 +1,17 @@
 //+------------------------------------------------------------------+
-//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.52)|
+//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.53)|
 //| PATCHED: Real hedge trigger, basket close, anti-chop, post-SL    |
 //| aggressive hedge trailing / immediate hedge close options         |
 //| v3.52: FIX - hedge trigger now runs every tick (not per-candle)  |
+//| v3.53: DIAG - preset-override warnings, per-candle hedge status  |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
-#property version   "3.52"
+#property version   "3.53"
 #property strict
 #include <Trade/Trade.mqh>
 
 //=== CONFIG =========================================================
-input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_52";
+input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_53";
 input double LotSize        = 0.10;
 input double MaxLotSize     = 2.0;
 
@@ -75,7 +76,7 @@ input double MinProfitPipsToCloseRecovery = 2.0; // Primary must be at least thi
 input int    MaxHedgesPerPrimaryTrade     = 1;
 
 input double MinATRForHedgePips           = 25.0;
-input double MinMAGapPips                 = 10.0;
+input double MinMAGapPips                 = 0.0;
 
 input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
@@ -144,6 +145,7 @@ int      trackedHedgeCount[];
 ulong    trackedParentTicket[];
 bool     trackedPostSLTrail[];
 bool     g_PartialClosed = false;
+datetime g_lastHedgeStatusBar = 0;  // throttle per-candle hedge status print
 
 //+------------------------------------------------------------------+
 void ApplyModeSettings()
@@ -190,10 +192,35 @@ void ApplyModeSettings()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print(EA_Name,": Init v3.52 - Hedge trigger per-tick fix + basket close + anti-chop + post-primary hedge handling");
+   Print(EA_Name,": Init v3.53 - Diagnostic improvements: preset warnings, per-candle hedge status");
    ApplyModeSettings();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
+
+   // Warn the user when UsePresets silently overrides their manual inputs
+   if(UsePresets)
+   {
+      string mode = (TradingMode == MODE_DAYTRADING) ? "DAY" : "SCALP";
+      double presetSL   = (TradingMode == MODE_DAYTRADING) ? DAY_ATR_SL_MULT   : SCALP_ATR_SL_MULT;
+      double presetTP   = (TradingMode == MODE_DAYTRADING) ? DAY_ATR_TP_MULT   : SCALP_ATR_TP_MULT;
+      int    presetFast = (TradingMode == MODE_DAYTRADING) ? DAY_MA_FAST_PERIOD : SCALP_MA_FAST_PERIOD;
+      int    presetSlow = (TradingMode == MODE_DAYTRADING) ? DAY_MA_SLOW_PERIOD : SCALP_MA_SLOW_PERIOD;
+      Print("--- UsePresets=true (",mode," mode) is ACTIVE: your manual inputs below are OVERRIDDEN ---");
+      if(InpATR_SL_Mult != presetSL)
+         PrintFormat("  InpATR_SL_Mult   : %.2f (your input) IGNORED -> %.2f (preset)", InpATR_SL_Mult, presetSL);
+      if(InpATR_TP_Mult != presetTP)
+         PrintFormat("  InpATR_TP_Mult   : %.2f (your input) IGNORED -> %.2f (preset)", InpATR_TP_Mult, presetTP);
+      if(InpMAFastPeriod != presetFast)
+         PrintFormat("  InpMAFastPeriod  : %d (your input) IGNORED -> %d (preset)", InpMAFastPeriod, presetFast);
+      if(InpMASlowPeriod != presetSlow)
+         PrintFormat("  InpMASlowPeriod  : %d (your input) IGNORED -> %d (preset)", InpMASlowPeriod, presetSlow);
+      PrintFormat("  Effective SL = %.2f x ATR  |  Hedge fires at %.0f pips adverse (%.1f%% of SL if ATR=MinATR)",
+                  ATR_SL_Mult, HedgeTriggerPips, MinATRForHedgePips>0 ? HedgeTriggerPips/(ATR_SL_Mult*MinATRForHedgePips)*100.0 : 0.0);
+      if(UseHedgeTriggerPips && MinATRForHedgePips > 0 && HedgeTriggerPips >= ATR_SL_Mult * MinATRForHedgePips)
+         PrintFormat("  *** WARNING: HedgeTriggerPips (%.0f) >= effective min-SL (%.0f). Hedge may never fire before SL! Set HedgeTriggerPips < %.0f ***",
+                     HedgeTriggerPips, ATR_SL_Mult * MinATRForHedgePips, ATR_SL_Mult * MinATRForHedgePips);
+      Print("----------------------------------------------------------------------");
+   }
 
    if(MAFastPeriod < 2)
    {
@@ -236,7 +263,7 @@ int OnInit()
 
    PeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   Print("INIT SUCCESS - v3.52 Ready");
+   Print("INIT SUCCESS - v3.53 Ready");
    return(INIT_SUCCEEDED);
 }
 
@@ -502,6 +529,30 @@ void OnTick()
                double hedgeTrigger = HedgeTriggerPips;
                if(!UseHedgeTriggerPips)
                   hedgeTrigger = (ATRBuf[0] * HedgeTriggerATRMult) / pip;
+
+               // Per-candle diagnostic: print hedge status once per new bar so the user can
+               // see exactly why the hedge hasn't fired yet (no spam on every tick).
+               if(DebugMode)
+               {
+                  datetime barTime = iTime(_Symbol, _Period, 0);
+                  if(barTime != g_lastHedgeStatusBar)
+                  {
+                     g_lastHedgeStatusBar = barTime;
+                     double atrPipsD   = ATRBuf[0] / pip;
+                     double maGapPipsD = MathAbs(FastMA[1] - SlowMA[1]) / pip;
+                     string reason = "";
+                     if(adversePips < hedgeTrigger)
+                        reason = StringFormat("need %.1f more pips adverse", hedgeTrigger - adversePips);
+                     else if(atrPipsD < MinATRForHedgePips)
+                        reason = StringFormat("ATR too low (%.1f < %.1f)", atrPipsD, MinATRForHedgePips);
+                     else if(maGapPipsD < MinMAGapPips)
+                        reason = StringFormat("MA gap too low (%.1f < %.1f)", maGapPipsD, MinMAGapPips);
+                     else
+                        reason = "WILL FIRE THIS TICK";
+                     PrintFormat("[%s] HedgeStatus: adverse=%.1f pips | trigger=%.1f | SL~%.1f pips | %s",
+                                 EA_Name, adversePips, hedgeTrigger, ATR_SL_Mult * atrPipsD, reason);
+                  }
+               }
 
                if(adversePips >= hedgeTrigger)
                {
