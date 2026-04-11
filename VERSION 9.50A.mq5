@@ -770,9 +770,10 @@ bool OpenTrade(const ENUM_ORDER_TYPE type, double lotsParam, bool isHedge=false,
    if(isHedge)
    {
       sl = 0.0;
-      tp = (HedgeTPPips > 0.0) ? ((type == ORDER_TYPE_BUY) ? price + HedgeTPPips * pip
-                                                            : price - HedgeTPPips * pip)
-                                : 0.0;
+      if(HedgeTPPips > 0.0)
+         tp = (type == ORDER_TYPE_BUY) ? price + HedgeTPPips * pip : price - HedgeTPPips * pip;
+      else
+         tp = 0.0;
    }
 
    sl = NormalizeDouble(sl, _Digits);
