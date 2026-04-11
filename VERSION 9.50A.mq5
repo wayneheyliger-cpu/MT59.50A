@@ -79,7 +79,7 @@ input double MinMAGapPips                 = 10.0;
 input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
 //=== RECOVERY/HEDGE TRADE PROTECTION =================================
-input double HedgeTPPips                = 0.0;   // Fixed TP on hedge trade in pips (0 = disabled)
+input double HedgeTPPips                = 40.0;  // Fixed TP on hedge trade in pips (0 = disabled)
 input double HedgeBreakEvenTriggerPips  = 0.0;   // Move hedge SL to BE after this many pips profit (0 = disabled)
 input double HedgeBreakEvenPlusPips     = 5.0;   // Lock in this many extra pips when BE triggers
 input double HedgeTrailStartPips        = 0.0;   // Start trailing hedge after this many pips profit (0 = disabled)
