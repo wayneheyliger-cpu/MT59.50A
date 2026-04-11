@@ -1,10 +1,11 @@
 //+------------------------------------------------------------------+
-//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.54)|
+//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.55)|
 //| PATCHED: Real hedge trigger, basket close, anti-chop, post-SL    |
 //| aggressive hedge trailing / immediate hedge close options         |
 //| v3.52: FIX - hedge trigger now runs every tick (not per-candle)  |
 //| v3.53: DIAG - preset-override warnings, per-candle hedge status  |
 //| v3.54: FIX - MaxHedgesPerPrimaryTrade=0 now means unlimited      |
+//| v3.55: FIX - MinProfitPipsToCloseRecovery now requires basket>=0 |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
 #property version   "3.53"
@@ -12,7 +13,7 @@
 #include <Trade/Trade.mqh>
 
 //=== CONFIG =========================================================
-input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_54";
+input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_55";
 input double LotSize        = 0.10;
 input double MaxLotSize     = 2.0;
 
@@ -193,7 +194,7 @@ void ApplyModeSettings()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print(EA_Name,": Init v3.54 - Fix: MaxHedgesPerPrimaryTrade=0 now means unlimited hedges");
+   Print(EA_Name,": Init v3.55 - Fix: MinProfitPipsToCloseRecovery now requires basket net >= 0");
    ApplyModeSettings();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
@@ -264,7 +265,7 @@ int OnInit()
 
    PeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   Print("INIT SUCCESS - v3.53 Ready");
+   Print("INIT SUCCESS - v3.55 Ready");
    return(INIT_SUCCEEDED);
 }
 
@@ -446,9 +447,12 @@ void ManageHedgeRecovery()
    }
 
    // AUTO-CLOSE RECOVERY WHEN PRIMARY RETURNS TO PROFIT
-   // When the primary is at least MinProfitPipsToCloseRecovery pips positive,
-   // close the linked recovery immediately — prevents spread-noise churn and
-   // stops the recovery leg from bleeding while the primary is winning.
+   // When the primary is at least MinProfitPipsToCloseRecovery pips positive AND
+   // the basket (primary + recovery) is net >= 0, close the linked recovery.
+   // IMPORTANT: we require basket >= 0 to prevent the bleed cycle where the
+   // recovery is closed at a large loss (e.g. -52 pips) the moment the primary
+   // ticks 2 pips positive, then an unlimited new recovery opens and the cycle
+   // repeats. Without the basket check, each cycle burns spread + the recovery loss.
    if(MinProfitPipsToCloseRecovery > 0.0)
    {
       double minPips = MinProfitPipsToCloseRecovery * PipPoint();
@@ -466,21 +470,35 @@ void ManageHedgeRecovery()
          double pipProfit = (primType == POSITION_TYPE_BUY) ? (mktPx - openPx) : (openPx - mktPx);
          if(pipProfit < minPips) continue; // not sufficiently positive yet
 
-         // Primary is sufficiently positive — close its linked recovery
+         double primaryMoneyProfit = PositionGetDouble(POSITION_PROFIT);
+
+         // Primary is sufficiently positive — close its linked recovery only if basket is net >= 0
          for(int j=ArraySize(trackedTickets)-1; j>=0; j--)
          {
             if(!trackedIsSecond[j]) continue;
             if(trackedParentTicket[j] != primaryTkt) continue;
 
             ulong recTkt = trackedTickets[j];
-            if(PositionSelectByTicket(recTkt))
+            if(!PositionSelectByTicket(recTkt)) continue;
+
+            double recProfit   = PositionGetDouble(POSITION_PROFIT);
+            double basketProfit = primaryMoneyProfit + recProfit;
+
+            // Guard: never close recovery at a net basket loss — this prevents the bleed
+            // cycle (recovery closes at -52 pips, immediately re-opens, repeat forever).
+            if(basketProfit < 0.0)
             {
-               if(trade.PositionClose(recTkt))
-               {
-                  PrintFormat("[%s] Auto-closed recovery %I64u — primary %I64u returned to profit (%.1f pips)",
-                              EA_Name, recTkt, primaryTkt, pipProfit / PipPoint());
-                  UntrackPosition(recTkt);
-               }
+               if(DebugMode)
+                  PrintFormat("[%s] MinProfitPips met (%.1f pips) but basket still negative (%.2f) — keeping recovery open",
+                              EA_Name, pipProfit / PipPoint(), basketProfit);
+               continue;
+            }
+
+            if(trade.PositionClose(recTkt))
+            {
+               PrintFormat("[%s] Auto-closed recovery %I64u — primary %I64u returned to profit (%.1f pips, basket=%.2f)",
+                           EA_Name, recTkt, primaryTkt, pipProfit / PipPoint(), basketProfit);
+               UntrackPosition(recTkt);
             }
          }
       }
