@@ -1,9 +1,10 @@
 //+------------------------------------------------------------------+
-//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.53)|
+//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.54)|
 //| PATCHED: Real hedge trigger, basket close, anti-chop, post-SL    |
 //| aggressive hedge trailing / immediate hedge close options         |
 //| v3.52: FIX - hedge trigger now runs every tick (not per-candle)  |
 //| v3.53: DIAG - preset-override warnings, per-candle hedge status  |
+//| v3.54: FIX - MaxHedgesPerPrimaryTrade=0 now means unlimited      |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
 #property version   "3.53"
@@ -11,7 +12,7 @@
 #include <Trade/Trade.mqh>
 
 //=== CONFIG =========================================================
-input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_53";
+input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_54";
 input double LotSize        = 0.10;
 input double MaxLotSize     = 2.0;
 
@@ -73,7 +74,7 @@ input bool   CloseHedgeOnlyOnBasketProfit = true;
 input double BasketCloseProfitMoney       = 5.0;
 input double MinProfitPipsToCloseRecovery = 2.0; // Primary must be at least this many pips positive before recovery is auto-closed
 
-input int    MaxHedgesPerPrimaryTrade     = 1;
+input int    MaxHedgesPerPrimaryTrade     = 1;  // Max hedge trades per primary (0 = unlimited)
 
 input double MinATRForHedgePips           = 25.0;
 input double MinMAGapPips                 = 0.0;
@@ -192,7 +193,7 @@ void ApplyModeSettings()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print(EA_Name,": Init v3.53 - Diagnostic improvements: preset warnings, per-candle hedge status");
+   Print(EA_Name,": Init v3.54 - Fix: MaxHedgesPerPrimaryTrade=0 now means unlimited hedges");
    ApplyModeSettings();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
@@ -509,7 +510,7 @@ void OnTick()
    if(CountOpenPositions() == 1 && !HaveOpenHedge())
    {
       ulong primaryTicket = GetPrimaryTicket();
-      if(primaryTicket != 0 && GetPrimaryHedgeCount(primaryTicket) < MaxHedgesPerPrimaryTrade)
+      if(primaryTicket != 0 && (MaxHedgesPerPrimaryTrade == 0 || GetPrimaryHedgeCount(primaryTicket) < MaxHedgesPerPrimaryTrade))
       {
          if(PositionSelectByTicket(primaryTicket) && PositionGetString(POSITION_SYMBOL) == _Symbol)
          {
