@@ -12,7 +12,7 @@
 //|              no protection when trail/BE pips were not reached.  |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
-#property version   "3.53"
+#property version   "3.56"
 #property strict
 #include <Trade/Trade.mqh>
 
@@ -88,7 +88,7 @@ input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
 //=== RECOVERY/HEDGE TRADE PROTECTION =================================
 input double HedgeTPPips                = 40.0;  // Fixed TP on hedge trade in pips (0 = disabled)
-input double HedgeSLMultiplier          = 1.0;   // Hedge hard SL = ATR * this mult (same as primary when 1.0; 0 = no hard SL)
+input double HedgeSLMultiplier          = 1.0;   // Hedge hard SL = ATR * this multiplier (same as primary when 1.0; 0 = no hard SL)
 input double HedgeBreakEvenTriggerPips  = 0.0;   // Move hedge SL to BE after this many pips profit (0 = disabled)
 input double HedgeBreakEvenPlusPips     = 5.0;   // Lock in this many extra pips when BE triggers
 input double HedgeTrailStartPips        = 0.0;   // Start trailing hedge after this many pips profit (0 = disabled)
