@@ -1,11 +1,15 @@
 //+------------------------------------------------------------------+
-//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.55)|
+//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.56)|
 //| PATCHED: Real hedge trigger, basket close, anti-chop, post-SL    |
 //| aggressive hedge trailing / immediate hedge close options         |
 //| v3.52: FIX - hedge trigger now runs every tick (not per-candle)  |
 //| v3.53: DIAG - preset-override warnings, per-candle hedge status  |
 //| v3.54: FIX - MaxHedgesPerPrimaryTrade=0 now means unlimited      |
 //| v3.55: FIX - MinProfitPipsToCloseRecovery now requires basket>=0 |
+//| v3.56: FIX - hedge now opens with a hard ATR-based stop loss     |
+//|              (HedgeSLMultiplier, default 1.0). Previously hedge  |
+//|              opened with sl=0 and could float indefinitely with  |
+//|              no protection when trail/BE pips were not reached.  |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
 #property version   "3.53"
@@ -13,7 +17,7 @@
 #include <Trade/Trade.mqh>
 
 //=== CONFIG =========================================================
-input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_55";
+input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_56";
 input double LotSize        = 0.10;
 input double MaxLotSize     = 2.0;
 
@@ -84,6 +88,7 @@ input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
 //=== RECOVERY/HEDGE TRADE PROTECTION =================================
 input double HedgeTPPips                = 40.0;  // Fixed TP on hedge trade in pips (0 = disabled)
+input double HedgeSLMultiplier          = 1.0;   // Hedge hard SL = ATR * this mult (same as primary when 1.0; 0 = no hard SL)
 input double HedgeBreakEvenTriggerPips  = 0.0;   // Move hedge SL to BE after this many pips profit (0 = disabled)
 input double HedgeBreakEvenPlusPips     = 5.0;   // Lock in this many extra pips when BE triggers
 input double HedgeTrailStartPips        = 0.0;   // Start trailing hedge after this many pips profit (0 = disabled)
@@ -194,7 +199,7 @@ void ApplyModeSettings()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print(EA_Name,": Init v3.55 - Fix: MinProfitPipsToCloseRecovery now requires basket net >= 0");
+   Print(EA_Name,": Init v3.56 - Fix: hedge now opens with hard ATR-based SL (HedgeSLMultiplier=", HedgeSLMultiplier, ")");
    ApplyModeSettings();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
@@ -218,6 +223,10 @@ int OnInit()
          PrintFormat("  InpMASlowPeriod  : %d (your input) IGNORED -> %d (preset)", InpMASlowPeriod, presetSlow);
       PrintFormat("  Effective SL = %.2f x ATR  |  Hedge fires at %.0f pips adverse (%.1f%% of SL if ATR=MinATR)",
                   ATR_SL_Mult, HedgeTriggerPips, MinATRForHedgePips>0 ? HedgeTriggerPips/(ATR_SL_Mult*MinATRForHedgePips)*100.0 : 0.0);
+      if(HedgeSLMultiplier > 0.0)
+         PrintFormat("  Hedge hard SL  = %.2f x ATR (HedgeSLMultiplier)", HedgeSLMultiplier);
+      else
+         PrintFormat("  *** WARNING: HedgeSLMultiplier=0 — hedge opens with NO hard stop loss! ***");
       if(UseHedgeTriggerPips && MinATRForHedgePips > 0 && HedgeTriggerPips >= ATR_SL_Mult * MinATRForHedgePips)
          PrintFormat("  *** WARNING: HedgeTriggerPips (%.0f) >= effective min-SL (%.0f). Hedge may never fire before SL! Set HedgeTriggerPips < %.0f ***",
                      HedgeTriggerPips, ATR_SL_Mult * MinATRForHedgePips, ATR_SL_Mult * MinATRForHedgePips);
@@ -265,7 +274,7 @@ int OnInit()
 
    PeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   Print("INIT SUCCESS - v3.55 Ready");
+   Print("INIT SUCCESS - v3.56 Ready");
    return(INIT_SUCCEEDED);
 }
 
@@ -849,7 +858,15 @@ bool OpenTrade(const ENUM_ORDER_TYPE type, double lotsParam, bool isHedge=false,
 
    if(isHedge)
    {
-      sl = 0.0;
+      // v3.56: Give the hedge a hard ATR-based stop loss at open so it can never
+      // float indefinitely without protection. HedgeSLMultiplier=1.0 gives the same
+      // SL distance as the primary; set to 0 to restore the old sl=0 behaviour.
+      if(HedgeSLMultiplier > 0.0)
+         sl = (type == ORDER_TYPE_BUY) ? price - sl_pips * HedgeSLMultiplier * pip
+                                       : price + sl_pips * HedgeSLMultiplier * pip;
+      else
+         sl = 0.0;
+
       if(HedgeTPPips > 0.0)
          tp = (type == ORDER_TYPE_BUY) ? price + HedgeTPPips * pip : price - HedgeTPPips * pip;
       else
