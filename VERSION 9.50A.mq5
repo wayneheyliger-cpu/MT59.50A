@@ -93,7 +93,7 @@ input double MinMAGapPips                 = 0.0;
 input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
 //=== RECOVERY/HEDGE TRADE PROTECTION =================================
-input double HedgeTPPips                = 0.0;   // Fixed TP on hedge trade in pips (0 = disabled). NOTE: on gold/CFDs with Digits=2 each "pip"=$0.01 — use 0 to rely on SL+basket close only
+input double HedgeTPPips                = 0.0;   // Fixed TP on hedge (pips). 0 = disabled (recommended). On gold/CFDs (Digits=2) PipPoint()=0.01, so 40 pips = 0.40 price units — closes in seconds. Rely on HedgeSL + basket close instead.
 input double HedgeSLMultiplier          = 1.0;   // Hedge hard SL = ATR * this multiplier (same as primary when 1.0; 0 = no hard SL)
 input double HedgeBreakEvenTriggerPips  = 0.0;   // Move hedge SL to BE after this many pips profit (0 = disabled)
 input double HedgeBreakEvenPlusPips     = 5.0;   // Lock in this many extra pips when BE triggers
