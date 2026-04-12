@@ -1,0 +1,129 @@
+
+SETTINGS
+
+2026.04.12 08:33:01.044	MetaTester 5 started on 127.0.0.1:3000
+2026.04.12 08:33:01.053	cloud network mode is off
+2026.04.12 08:33:01.053	initialization finished
+2026.04.12 08:33:01.244	login (build 5687)
+2026.04.12 08:33:01.427	57332 bytes of account info loaded
+2026.04.12 08:33:01.427	1478 bytes of tester parameters loaded
+2026.04.12 08:33:01.427	30916 bytes of input parameters loaded
+2026.04.12 08:33:01.429	7198 bytes of symbols list loaded (948 symbols)
+2026.04.12 08:33:01.429	expert file added: Experts\VERSION 3.57.ex5. 67030 bytes loaded
+2026.04.12 08:33:01.446	1116 Mb available, 13 blocks set for ticks generating
+2026.04.12 08:33:01.446	initial deposit 10000.00 USD, leverage 1:100
+2026.04.12 08:33:01.446	successfully initialized
+2026.04.12 08:33:01.446	74 Kb of total initialization data received
+2026.04.12 08:33:01.448	Intel Core i3-1005G1  @ 1.20GHz, 3877 MB
+2026.04.12 08:33:01.477	XAUUSD: symbol to be synchronized
+2026.04.12 08:33:01.477	XAUUSD: symbol synchronized, 3720 bytes of symbol info received
+2026.04.12 08:33:01.480	XAUUSD: history synchronization started
+2026.04.12 08:33:01.481	XAUUSD: load 27 bytes of history data to synchronize in 0:00:00.000
+2026.04.12 08:33:01.481	XAUUSD: history synchronized from 2021.01.04 to 2026.04.10
+2026.04.12 08:33:01.483	XAUUSD: ticks synchronization started
+2026.04.12 08:33:02.486	XAUUSD: load 34 bytes of tick data to synchronize in 0:00:01.016
+2026.04.12 08:33:02.486	XAUUSD: history ticks synchronized from 2026.01.20 to 2026.04.10
+2026.04.12 08:33:02.542	XAUUSD,M1: history cache allocated for 442230 bars and contains 410344 bars from 2025.01.02 01:01 to 2026.02.27 23:59
+2026.04.12 08:33:02.542	XAUUSD,M1: history begins from 2025.01.02 01:01
+2026.04.12 08:33:02.633	XAUUSD,M1 (FPMarkets-Demo2): generating based on real ticks
+2026.04.12 08:33:02.633	testing with execution random delay
+2026.04.12 08:33:02.634	XAUUSD,M1: testing of Experts\VERSION 3.57.ex5 from 2026.03.01 00:00 to 2026.03.31 00:00 started with inputs:
+2026.04.12 08:33:02.634	  EA_Name=3.57
+2026.04.12 08:33:02.634	  LotSize=0.01
+2026.04.12 08:33:02.634	  MaxLotSize=0.05
+2026.04.12 08:33:02.634	  TradingMode=1
+2026.04.12 08:33:02.634	  UsePresets=false
+2026.04.12 08:33:02.634	  MAFastMethod=1
+2026.04.12 08:33:02.634	  MAFastPrice=1
+2026.04.12 08:33:02.634	  MASlowMethod=0
+2026.04.12 08:33:02.634	  MASlowPrice=1
+2026.04.12 08:33:02.634	  InpMAFastPeriod=2
+2026.04.12 08:33:02.634	  InpMASlowPeriod=3
+2026.04.12 08:33:02.634	  MinMASepEntryPips=0
+2026.04.12 08:33:02.634	  InpATR_Period=14
+2026.04.12 08:33:02.634	  InpATR_SL_Mult=25
+2026.04.12 08:33:02.634	  InpATR_TP_Mult=5
+2026.04.12 08:33:02.634	  InpATR_TrailStart_Mult=2
+2026.04.12 08:33:02.634	  InpATR_TrailStep_Mult=1
+2026.04.12 08:33:02.634	  InpRiskPercent=0.5
+2026.04.12 08:33:02.634	  InpMaxTradesPerDirection=2
+2026.04.12 08:33:02.634	  InpCooldownCandles=20
+2026.04.12 08:33:02.634	  MaxDrawdownPercent=15.0
+2026.04.12 08:33:02.634	  MagicNumber=12685
+2026.04.12 08:33:02.634	  EnableAlerts=false
+2026.04.12 08:33:02.634	  EnableNotifications=false
+2026.04.12 08:33:02.634	  EnableEmail=false
+2026.04.12 08:33:02.634	  UseTrailingStop=true
+2026.04.12 08:33:02.634	  UseBreakEven=false
+2026.04.12 08:33:02.634	  BreakEvenTriggerPips=25
+2026.04.12 08:33:02.634	  BreakEvenPlusPips=5
+2026.04.12 08:33:02.634	  UsePartialClose=false
+2026.04.12 08:33:02.634	  PartialClosePips=0
+2026.04.12 08:33:02.634	  PartialClosePercent=0
+2026.04.12 08:33:02.634	  TrailBufferPips=5.0
+2026.04.12 08:33:02.634	  HedgeLotMultiplier=2.0
+2026.04.12 08:33:02.634	  UseSessionFilter=false
+2026.04.12 08:33:02.634	  LondonOpenHour=8
+2026.04.12 08:33:02.634	  NYCloseHour=22
+2026.04.12 08:33:02.634	  DebugMode=true
+2026.04.12 08:33:02.634	  UseHedgeTriggerPips=true
+2026.04.12 08:33:02.634	  HedgeTriggerPips=750
+2026.04.12 08:33:02.634	  HedgeTriggerATRMult=0.40
+2026.04.12 08:33:02.634	  CloseHedgeOnlyOnBasketProfit=true
+2026.04.12 08:33:02.634	  BasketCloseProfitMoney=5.0
+2026.04.12 08:33:02.634	  MinProfitPipsToCloseRecovery=0
+2026.04.12 08:33:02.634	  MaxHedgesPerPrimaryTrade=0
+2026.04.12 08:33:02.634	  MinATRForHedgePips=2
+2026.04.12 08:33:02.634	  MinMAGapPips=2
+2026.04.12 08:33:02.634	  MaxHedgeBarsOpen=0
+2026.04.12 08:33:02.634	  HedgeTPPips=4000
+2026.04.12 08:33:02.634	  HedgeSLMultiplier=1.0
+2026.04.12 08:33:02.634	  HedgeBreakEvenTriggerPips=100
+2026.04.12 08:33:02.634	  HedgeBreakEvenPlusPips=10
+2026.04.12 08:33:02.634	  HedgeTrailStartPips=600
+2026.04.12 08:33:02.634	  HedgeTrailDistancePips=400
+2026.04.12 08:33:02.634	  HedgeTrailStepPips=100
+2026.04.12 08:33:02.634	  CloseHedgeImmediatelyAfterPrimarySL=false
+2026.04.12 08:33:02.634	  UseAggressiveTrailAfterPrimarySL=true
+2026.04.12 08:33:02.634	  AggTrailStartPips=300
+2026.04.12 08:33:02.634	  AggTrailDistancePips=200
+2026.04.12 08:33:02.634	  AggTrailStepPips=100
+2026.04.12 08:33:02.651	2026.03.01 00:00:00   3.57: Init v3.57 - Fix: HedgeTPPips default=0; hedge count decrements on close
+2026.04.12 08:33:02.651	2026.03.01 00:00:00   INIT SUCCESS - v3.57 Ready
+2026.04.12 08:33:03.303	XAUUSD : real ticks begin from 2026.01.20 00:00:00
+
+
+
+
+LOGS   
+
+2026.04.12 08:38:12.158	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.159	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.159	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.160	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.160	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.161	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.161	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.162	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.162	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.163	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.163	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.164	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.164	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.165	2026.03.02 01:18:45   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+2026.04.12 08:38:12.165	2026.03.02 01:18:45   CTrade::OrderSend: modify position #13 XAUUSD (sl: 5352.07, tp: 5392.03) [invalid stops]
+2026.04.12 08:38:12.165	2026.03.02 01:18:46   failed modify #13 buy 0.02 XAUUSD sl: 5352.07, tp: 5392.03 -> sl: 5352.07, tp: 5392.03 [Invalid stops]
+
+
+
+2026.04.12 08:44:26.141	2026.03.05 10:52:50   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:50   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:50   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:51   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:51   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:51   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:51   [3.57] Hedge 195 switched to aggressive trailing after primary close
+2026.04.12 08:44:26.141	2026.03.05 10:52:51   [3.57] Hedge 195 switched to aggressive trailing after primary close
+
+
+
