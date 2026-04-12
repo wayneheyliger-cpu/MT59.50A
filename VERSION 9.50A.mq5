@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.56)|
+//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.57)|
 //| PATCHED: Real hedge trigger, basket close, anti-chop, post-SL    |
 //| aggressive hedge trailing / immediate hedge close options         |
 //| v3.52: FIX - hedge trigger now runs every tick (not per-candle)  |
@@ -8,16 +8,22 @@
 //| v3.55: FIX - MinProfitPipsToCloseRecovery now requires basket>=0 |
 //| v3.56: FIX - hedge now opens with a hard ATR-based stop loss     |
 //|              (HedgeSLMultiplier, default 1.0). Previously hedge  |
-//|              opened with sl=0 and could float indefinitely with  |
-//|              no protection when trail/BE pips were not reached.  |
+//|              opened with sl=0 and could float indefinitely.      |
+//| v3.57: FIX - HedgeTPPips default changed to 0 (disabled). On    |
+//|              gold/CFDs (Digits=2) 40 "pips"=$0.40; hedge closed  |
+//|              in seconds, leaving primary with no protection.     |
+//|       FIX - hedge count on parent now decremented when a hedge   |
+//|              closes, so a new hedge can re-open if primary stays  |
+//|              adverse (previously MaxHedgesPerPrimaryTrade=1      |
+//|              permanently blocked re-hedging after first close).  |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
-#property version   "3.56"
+#property version   "3.57"
 #property strict
 #include <Trade/Trade.mqh>
 
 //=== CONFIG =========================================================
-input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_56";
+input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_57";
 input double LotSize        = 0.10;
 input double MaxLotSize     = 2.0;
 
@@ -87,7 +93,7 @@ input double MinMAGapPips                 = 0.0;
 input int    MaxHedgeBarsOpen             = 0;     // 0 = disabled
 
 //=== RECOVERY/HEDGE TRADE PROTECTION =================================
-input double HedgeTPPips                = 40.0;  // Fixed TP on hedge trade in pips (0 = disabled)
+input double HedgeTPPips                = 0.0;   // Fixed TP on hedge trade in pips (0 = disabled). NOTE: on gold/CFDs with Digits=2 each "pip"=$0.01 — use 0 to rely on SL+basket close only
 input double HedgeSLMultiplier          = 1.0;   // Hedge hard SL = ATR * this multiplier (same as primary when 1.0; 0 = no hard SL)
 input double HedgeBreakEvenTriggerPips  = 0.0;   // Move hedge SL to BE after this many pips profit (0 = disabled)
 input double HedgeBreakEvenPlusPips     = 5.0;   // Lock in this many extra pips when BE triggers
@@ -199,7 +205,7 @@ void ApplyModeSettings()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print(EA_Name,": Init v3.56 - Fix: hedge now opens with hard ATR-based SL (HedgeSLMultiplier=", HedgeSLMultiplier, ")");
+   Print(EA_Name,": Init v3.57 - Fix: HedgeTPPips default=0; hedge count decrements on close");
    ApplyModeSettings();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
@@ -274,7 +280,7 @@ int OnInit()
 
    PeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   Print("INIT SUCCESS - v3.56 Ready");
+   Print("INIT SUCCESS - v3.57 Ready");
    return(INIT_SUCCEEDED);
 }
 
@@ -988,6 +994,25 @@ void UntrackPosition(ulong ticket)
    for(int i=0; i<sz; i++)
    {
       if(trackedTickets[i] != ticket) continue;
+
+      // v3.57: If we are untracking a hedge, decrement the parent primary's hedge
+      // count so it can accept a new hedge if it is still open and adverse.
+      // Without this, MaxHedgesPerPrimaryTrade=1 permanently blocks re-hedging
+      // once the first hedge closes (e.g. via TP, basket close, or aggressive trail).
+      if(trackedIsSecond[i])
+      {
+         ulong parentTkt = trackedParentTicket[i];
+         if(parentTkt != 0)
+         {
+            int pidx = FindTrackedIndex(parentTkt);
+            if(pidx >= 0 && trackedHedgeCount[pidx] > 0)
+            {
+               trackedHedgeCount[pidx]--;
+               if(DebugMode) PrintFormat("[%s] Hedge count for primary %I64u decremented to %d",
+                                         EA_Name, parentTkt, trackedHedgeCount[pidx]);
+            }
+         }
+      }
 
       for(int j=i; j<sz-1; j++)
       {
