@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.57)|
+//| MA Crossover EA - Hedge + ATR Risk Sizing + Drawdown Pause (v3.58)|
 //| PATCHED: Real hedge trigger, basket close, anti-chop, post-SL    |
 //| aggressive hedge trailing / immediate hedge close options         |
 //| v3.52: FIX - hedge trigger now runs every tick (not per-candle)  |
@@ -16,14 +16,21 @@
 //|              closes, so a new hedge can re-open if primary stays  |
 //|              adverse (previously MaxHedgesPerPrimaryTrade=1      |
 //|              permanently blocked re-hedging after first close).  |
+//| v3.58: NEW - MaxConcurrentPrimaries input: allows new primary    |
+//|              trades to open while a previous primary/recovery     |
+//|              pair is still active. Set to 1 for old single-trade  |
+//|              behaviour, or higher to allow N simultaneous         |
+//|              independent primary+hedge groups.                   |
+//|       FIX - hedge trigger and ManageHedgeRecovery now iterate    |
+//|              over ALL open primaries, not just the first one.    |
 //+------------------------------------------------------------------+
 #property copyright "xAI Grok"
-#property version   "3.57"
+#property version   "3.58"
 #property strict
 #include <Trade/Trade.mqh>
 
 //=== CONFIG =========================================================
-input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_57";
+input string EA_Name        = "MA_Crossover_EA_Hedge_Double_v3_58";
 input double LotSize        = 0.10;
 input double MaxLotSize     = 2.0;
 
@@ -86,6 +93,8 @@ input double BasketCloseProfitMoney       = 5.0;
 input double MinProfitPipsToCloseRecovery = 2.0; // Primary must be at least this many pips positive before recovery is auto-closed
 
 input int    MaxHedgesPerPrimaryTrade     = 1;  // Max hedge trades per primary (0 = unlimited)
+
+input int    MaxConcurrentPrimaries       = 1;  // Max simultaneous independent primary trades (0=old: require empty book; 1=default single-trade; 2+=allow concurrent groups)
 
 input double MinATRForHedgePips           = 25.0;
 input double MinMAGapPips                 = 0.0;
@@ -205,7 +214,7 @@ void ApplyModeSettings()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print(EA_Name,": Init v3.57 - Fix: HedgeTPPips default=0; hedge count decrements on close");
+   Print(EA_Name,": Init v3.58 - NEW: MaxConcurrentPrimaries; hedge trigger + ManageHedgeRecovery handle multiple primary-hedge pairs");
    ApplyModeSettings();
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(20);
@@ -280,7 +289,7 @@ int OnInit()
 
    PeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   Print("INIT SUCCESS - v3.57 Ready");
+   Print("INIT SUCCESS - v3.58 Ready");
    return(INIT_SUCCEEDED);
 }
 
@@ -341,6 +350,28 @@ bool HaveOpenHedge()
    return false;
 }
 
+int CountOpenPrimaries()
+{
+   int c = 0;
+   for(int i = 0; i < ArraySize(trackedTickets); i++)
+   {
+      if(trackedIsSecond[i]) continue;
+      if(PositionSelectByTicket(trackedTickets[i])) c++;
+   }
+   return c;
+}
+
+bool HasOpenHedgeForPrimary(ulong primaryTicket)
+{
+   for(int i = 0; i < ArraySize(trackedTickets); i++)
+   {
+      if(!trackedIsSecond[i]) continue;
+      if(trackedParentTicket[i] != primaryTicket) continue;
+      if(PositionSelectByTicket(trackedTickets[i])) return true;
+   }
+   return false;
+}
+
 ulong GetPrimaryTicket()
 {
    for(int i=0; i<ArraySize(trackedTickets); i++)
@@ -394,48 +425,40 @@ void ManageHedgeRecovery()
 {
    if(CountOpenPositions() == 0) return;
 
-   ulong firstTicket = 0;
-   ulong hedgeTicket = 0;
-   double firstProfit = 0.0;
-   double hedgeProfit = 0.0;
-
-   for(int idx = 0; idx < ArraySize(trackedTickets); idx++)
+   // --- Process each open hedge, matching it to its parent primary ---
+   // Iterate backwards so that UntrackPosition (which shifts the array) is safe.
+   for(int hi = ArraySize(trackedTickets) - 1; hi >= 0; hi--)
    {
-      ulong t = trackedTickets[idx];
-      if(!PositionSelectByTicket(t)) continue;
+      if(!trackedIsSecond[hi]) continue;
 
-      if(!trackedIsSecond[idx])
-      {
-         firstTicket = t;
-         firstProfit = PositionGetDouble(POSITION_PROFIT);
-      }
-      else
-      {
-         hedgeTicket = t;
-         hedgeProfit = PositionGetDouble(POSITION_PROFIT);
-      }
-   }
+      ulong hedgeTicket = trackedTickets[hi];
+      if(!PositionSelectByTicket(hedgeTicket)) continue;
+      double hedgeProfit = PositionGetDouble(POSITION_PROFIT);
 
-   if(firstTicket == 0 && hedgeTicket != 0)
-   {
-      if(CloseHedgeImmediatelyAfterPrimarySL)
+      ulong parentTkt   = trackedParentTicket[hi];
+      bool  primaryOpen = (parentTkt != 0) && PositionSelectByTicket(parentTkt);
+
+      // Primary already closed — hedge is a solo survivor
+      if(!primaryOpen)
       {
-         trade.PositionClose(hedgeTicket);
-         UntrackPosition(hedgeTicket);
-         PrintFormat("[%s] Primary trade closed -> hedge closed immediately", EA_Name);
-         return;
+         if(CloseHedgeImmediatelyAfterPrimarySL)
+         {
+            trade.PositionClose(hedgeTicket);
+            UntrackPosition(hedgeTicket);
+            PrintFormat("[%s] Primary trade closed -> hedge %I64u closed immediately", EA_Name, hedgeTicket);
+            continue;
+         }
+
+         if(UseAggressiveTrailAfterPrimarySL && !trackedPostSLTrail[hi])
+            ActivateAggressiveTrailForHedge(hedgeTicket);
+
+         continue;
       }
 
-      if(UseAggressiveTrailAfterPrimarySL)
-      {
-         ActivateAggressiveTrailForHedge(hedgeTicket);
-         return;
-      }
-   }
-
-   if(firstTicket != 0 && hedgeTicket != 0)
-   {
-      double basketProfit = firstProfit + hedgeProfit;
+      // Both primary and hedge are still open
+      if(!PositionSelectByTicket(parentTkt)) continue;
+      double primaryProfit = PositionGetDouble(POSITION_PROFIT);
+      double basketProfit  = primaryProfit + hedgeProfit;
 
       if(CloseHedgeOnlyOnBasketProfit)
       {
@@ -443,8 +466,8 @@ void ManageHedgeRecovery()
          {
             trade.PositionClose(hedgeTicket);
             UntrackPosition(hedgeTicket);
-            PrintFormat("[%s] Basket profit %.2f reached -> hedge closed", EA_Name, basketProfit);
-            return;
+            PrintFormat("[%s] Basket profit %.2f reached -> hedge %I64u closed", EA_Name, basketProfit, hedgeTicket);
+            continue;
          }
       }
 
@@ -455,8 +478,8 @@ void ManageHedgeRecovery()
          {
             trade.PositionClose(hedgeTicket);
             UntrackPosition(hedgeTicket);
-            PrintFormat("[%s] Hedge max bars reached (%d) -> hedge closed", EA_Name, barsOpen);
-            return;
+            PrintFormat("[%s] Hedge %I64u max bars reached (%d) -> hedge closed", EA_Name, hedgeTicket, barsOpen);
+            continue;
          }
       }
    }
@@ -538,91 +561,95 @@ void OnTick()
    // --- Hedge/recovery trigger: runs EVERY TICK ---
    // Must be checked per-tick, not per-candle: the primary trade can hit its SL
    // (and disappear) mid-candle before the next candle open ever arrives.
-   // NOTE: if MODE_SCALPING is selected, ensure HedgeTriggerPips < primary ATR*SL_Mult
-   //       (e.g. ATR=15 pips, SL_Mult=1.0 → set HedgeTriggerPips ≤ 10).
-   if(CountOpenPositions() == 1 && !HaveOpenHedge())
+   // Iterates over ALL open primaries so each can independently get its own hedge.
+   for(int pi = ArraySize(trackedTickets) - 1; pi >= 0; pi--)
    {
-      ulong primaryTicket = GetPrimaryTicket();
-      if(primaryTicket != 0 && (MaxHedgesPerPrimaryTrade == 0 || GetPrimaryHedgeCount(primaryTicket) < MaxHedgesPerPrimaryTrade))
+      if(trackedIsSecond[pi]) continue; // primaries only
+
+      ulong primaryTicket = trackedTickets[pi];
+      if(!PositionSelectByTicket(primaryTicket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      // Skip if this primary already has an open hedge
+      if(HasOpenHedgeForPrimary(primaryTicket)) continue;
+
+      // Skip if hedge count limit reached for this primary
+      if(MaxHedgesPerPrimaryTrade > 0 && trackedHedgeCount[pi] >= MaxHedgesPerPrimaryTrade) continue;
+
+      ENUM_POSITION_TYPE ptype = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double firstLots = PositionGetDouble(POSITION_VOLUME);
+
+      double pip   = PipPoint();
+      double price = (ptype == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                                   : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      double adversePips = (ptype == POSITION_TYPE_BUY) ? (openPrice - price) / pip
+                                                        : (price - openPrice) / pip;
+
+      if(adversePips > 0.0)
       {
-         if(PositionSelectByTicket(primaryTicket) && PositionGetString(POSITION_SYMBOL) == _Symbol)
+         double hedgeTrigger = HedgeTriggerPips;
+         if(!UseHedgeTriggerPips)
+            hedgeTrigger = (ATRBuf[0] * HedgeTriggerATRMult) / pip;
+
+         // Per-candle diagnostic: print hedge status once per new bar so the user can
+         // see exactly why the hedge hasn't fired yet (no spam on every tick).
+         if(DebugMode)
          {
-            ENUM_POSITION_TYPE ptype = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            double firstLots = PositionGetDouble(POSITION_VOLUME);
-
-            double pip   = PipPoint();
-            double price = (ptype == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
-                                                        : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
-            double adversePips = (ptype == POSITION_TYPE_BUY) ? (openPrice - price) / pip
-                                                              : (price - openPrice) / pip;
-
-            if(adversePips > 0.0)
+            datetime barTime = iTime(_Symbol, _Period, 0);
+            if(barTime != g_lastHedgeStatusBar)
             {
-               double hedgeTrigger = HedgeTriggerPips;
-               if(!UseHedgeTriggerPips)
-                  hedgeTrigger = (ATRBuf[0] * HedgeTriggerATRMult) / pip;
+               g_lastHedgeStatusBar = barTime;
+               double atrPipsD   = ATRBuf[0] / pip;
+               double maGapPipsD = MathAbs(FastMA[1] - SlowMA[1]) / pip;
+               string reason = "";
+               if(adversePips < hedgeTrigger)
+                  reason = StringFormat("need %.1f more pips adverse", hedgeTrigger - adversePips);
+               else if(atrPipsD < MinATRForHedgePips)
+                  reason = StringFormat("ATR too low (%.1f < %.1f)", atrPipsD, MinATRForHedgePips);
+               else if(maGapPipsD < MinMAGapPips)
+                  reason = StringFormat("MA gap too low (%.1f < %.1f)", maGapPipsD, MinMAGapPips);
+               else
+                  reason = "WILL FIRE THIS TICK";
+               PrintFormat("[%s] HedgeStatus: adverse=%.1f pips | trigger=%.1f | SL~%.1f pips | %s",
+                           EA_Name, adversePips, hedgeTrigger, ATR_SL_Mult * atrPipsD, reason);
+            }
+         }
 
-               // Per-candle diagnostic: print hedge status once per new bar so the user can
-               // see exactly why the hedge hasn't fired yet (no spam on every tick).
-               if(DebugMode)
+         if(adversePips >= hedgeTrigger)
+         {
+            double atrPips   = ATRBuf[0] / pip;
+            double maGapPips = MathAbs(FastMA[1] - SlowMA[1]) / pip;
+
+            if(atrPips < MinATRForHedgePips)
+            {
+               if(DebugMode) PrintFormat("[%s] Hedge blocked: ATR too low (%.1f pips)", EA_Name, atrPips);
+            }
+            else if(maGapPips < MinMAGapPips)
+            {
+               if(DebugMode) PrintFormat("[%s] Hedge blocked: MA gap too low (%.1f pips)", EA_Name, maGapPips);
+            }
+            else
+            {
+               double hedgeLots = firstLots * HedgeLotMultiplier;
+               if(adversePips >= hedgeTrigger * 1.5)
+                  hedgeLots = firstLots * MathMin(HedgeLotMultiplier + 0.3, 2.0);
+
+               if(hedgeLots > MaxLotSize) hedgeLots = MaxLotSize;
+
+               double vol_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+               int vol_digits = (vol_step > 0.0 && vol_step < 1.0) ? (int)MathRound(-MathLog10(vol_step)) : 2;
+               if(vol_step > 0.0) hedgeLots = MathFloor(hedgeLots / vol_step) * vol_step;
+               hedgeLots = NormalizeDouble(hedgeLots, vol_digits);
+
+               ENUM_ORDER_TYPE htype = (ptype == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+
+               if(OpenTrade(htype, hedgeLots, true, primaryTicket))
                {
-                  datetime barTime = iTime(_Symbol, _Period, 0);
-                  if(barTime != g_lastHedgeStatusBar)
-                  {
-                     g_lastHedgeStatusBar = barTime;
-                     double atrPipsD   = ATRBuf[0] / pip;
-                     double maGapPipsD = MathAbs(FastMA[1] - SlowMA[1]) / pip;
-                     string reason = "";
-                     if(adversePips < hedgeTrigger)
-                        reason = StringFormat("need %.1f more pips adverse", hedgeTrigger - adversePips);
-                     else if(atrPipsD < MinATRForHedgePips)
-                        reason = StringFormat("ATR too low (%.1f < %.1f)", atrPipsD, MinATRForHedgePips);
-                     else if(maGapPipsD < MinMAGapPips)
-                        reason = StringFormat("MA gap too low (%.1f < %.1f)", maGapPipsD, MinMAGapPips);
-                     else
-                        reason = "WILL FIRE THIS TICK";
-                     PrintFormat("[%s] HedgeStatus: adverse=%.1f pips | trigger=%.1f | SL~%.1f pips | %s",
-                                 EA_Name, adversePips, hedgeTrigger, ATR_SL_Mult * atrPipsD, reason);
-                  }
-               }
-
-               if(adversePips >= hedgeTrigger)
-               {
-                  double atrPips   = ATRBuf[0] / pip;
-                  double maGapPips = MathAbs(FastMA[1] - SlowMA[1]) / pip;
-
-                  if(atrPips < MinATRForHedgePips)
-                  {
-                     if(DebugMode) PrintFormat("[%s] Hedge blocked: ATR too low (%.1f pips)", EA_Name, atrPips);
-                  }
-                  else if(maGapPips < MinMAGapPips)
-                  {
-                     if(DebugMode) PrintFormat("[%s] Hedge blocked: MA gap too low (%.1f pips)", EA_Name, maGapPips);
-                  }
-                  else
-                  {
-                     double hedgeLots = firstLots * HedgeLotMultiplier;
-                     if(adversePips >= hedgeTrigger * 1.5)
-                        hedgeLots = firstLots * MathMin(HedgeLotMultiplier + 0.3, 2.0);
-
-                     if(hedgeLots > MaxLotSize) hedgeLots = MaxLotSize;
-
-                     double vol_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-                     int vol_digits = (vol_step > 0.0 && vol_step < 1.0) ? (int)MathRound(-MathLog10(vol_step)) : 2;
-                     if(vol_step > 0.0) hedgeLots = MathFloor(hedgeLots / vol_step) * vol_step;
-                     hedgeLots = NormalizeDouble(hedgeLots, vol_digits);
-
-                     ENUM_ORDER_TYPE htype = (ptype == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-
-                     if(OpenTrade(htype, hedgeLots, true, primaryTicket))
-                     {
-                        IncrementPrimaryHedgeCount(primaryTicket);
-                        PrintFormat("[%s] Hedge recovery opened: %.2f lots, adverse=%.1f pips, trigger=%.1f pips",
-                                    EA_Name, hedgeLots, adversePips, hedgeTrigger);
-                     }
-                  }
+                  IncrementPrimaryHedgeCount(primaryTicket);
+                  PrintFormat("[%s] Hedge recovery opened: %.2f lots, adverse=%.1f pips, trigger=%.1f pips",
+                              EA_Name, hedgeLots, adversePips, hedgeTrigger);
                }
             }
          }
@@ -668,7 +695,12 @@ void OnTick()
 
    ENUM_TRADE_SIGNAL sig = GetSignal();
 
-   if(CountOpenPositions() == 0)
+   // Determine whether a new primary trade is allowed:
+   // MaxConcurrentPrimaries == 0 → old behaviour: only when the book is completely empty.
+   // MaxConcurrentPrimaries >= 1 → allow up to that many simultaneous primary-trade groups.
+   bool canOpenNew = (MaxConcurrentPrimaries <= 0) ? (CountOpenPositions() == 0)
+                                                   : (CountOpenPrimaries() < MaxConcurrentPrimaries);
+   if(canOpenNew)
    {
       if(sig == SIGNAL_NEUTRAL) return;
 
