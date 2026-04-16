@@ -1,0 +1,1003 @@
+//+------------------------------------------------------------------+
+//| MA Crossover EA - Simple Hedge Recovery                          |
+//| Clean rebuild                                                    |
+//+------------------------------------------------------------------+
+#property copyright "OpenAI"
+#property version   "2.33"
+#property strict
+
+#include <Trade/Trade.mqh>
+
+//=== CONFIG =========================================================
+input string  EA_Name                    = "MA_Crossover_EA_Hedge_Simple_v2_33";
+
+input double  LotSize                    = 0.10;
+input double  StopLossPips               = 1500.0;   //  stop loss
+input double  TakeProfitPips             = 1000.0;  //  take profit
+
+input int     MAFastPeriod               = 1;
+input ENUM_MA_METHOD MAFastMethod        = MODE_EMA;
+input ENUM_APPLIED_PRICE MAFastPrice     = PRICE_CLOSE;
+
+input int     MASlowPeriod               = 3;
+input ENUM_MA_METHOD MASlowMethod        = MODE_SMA;
+input ENUM_APPLIED_PRICE MASlowPrice     = PRICE_CLOSE;
+
+input int     MagicNumber                = 17635;
+input bool    EnableAlerts               = false;
+input bool    EnableNotifications        = false;
+input bool    EnableEmail                = false;
+
+// Protection
+input bool    UseTrailingStop            = true;
+input double  TrailingStartPips          = 200.0;
+input double  TrailingStepPips           = 50.0;
+
+input bool    UseBreakEven               = true;
+input double  BreakEvenTriggerPips       = 200.0;
+input double  BreakEvenPlusPips          = 25.0;
+
+// Multi-trade control
+input int     MaxPairs                   = 2;
+input int     TradesPerSignal            = 1;
+
+// Hedge control
+input double  HedgeLotMultiplier         = 2.0;
+input double  HedgeTriggerPips           = 40.0;    // Primary must be xneg pips for hedge to start
+
+input bool    UsePrimaryTrailing         = true;   // primary trailing off =false on=true
+input bool    UseHedgeTrailing           = true;    // Hedge trailing = on by default/
+input double  HedgeTrailingStartPips     = 50.0;    // Hedge starts trailing after this pips
+input double  HedgeTrailingStepPips      = 15.0;    // Hedge trail at this distance
+input bool    UseLinkedRecoveryDoubleClose         = true;
+input double  LinkedRecoveryDoubleCloseExtraPercent = 5.0;
+input int     HedgeReopenCooldownSeconds = 90;
+
+// Session control
+input bool    UseSessionFilter           = false;
+input int     LondonOpenHour             = 8;
+input int     NYCloseHour                = 22;
+input bool    CloseNegativeAtEndOfDay    = false;
+
+// Debug
+input bool    DebugMode                  = true;
+
+//=== ENUMS ==========================================================
+enum ENUM_TRADE_SIGNAL
+{
+   SIGNAL_BUY     = 1,
+   SIGNAL_SELL    = -1,
+   SIGNAL_NEUTRAL = 0
+};
+
+//=== STRUCTS ========================================================
+
+struct PairSlot
+{
+   ulong    primaryTicket;
+   ulong    hedgeTicket;
+   datetime hedgeBlockedUntil;
+   double   realizedRecoveryProfit;
+};
+//=== GLOBALS ========================================================
+CTrade trade;
+
+int FastMAHandle = INVALID_HANDLE;
+int SlowMAHandle = INVALID_HANDLE;
+
+double FastMA[];
+double SlowMA[];
+
+datetime lastCandleTime = 0;
+int      g_LastClosedDay = -1;
+
+int g_MaxPairsRuntime = 1;
+int g_TradesPerSignalRuntime = 1;
+
+PairSlot g_Pairs[];
+
+//+------------------------------------------------------------------+
+//| Basic helpers                                                    |
+//+------------------------------------------------------------------+
+double PipPoint()
+{
+   if(_Digits == 3 || _Digits == 5)
+      return (_Point * 10.0);
+
+   return _Point;
+}
+//+------------------------------------------------------------------+
+int VolumeDigits()
+{
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step <= 0.0)
+      return 2;
+
+   int digits = 0;
+   while(step < 1.0 && digits < 8)
+   {
+      step *= 10.0;
+      digits++;
+   }
+   return digits;
+}
+//+------------------------------------------------------------------+
+double NormalizeVolume(double lots)
+{
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   if(step <= 0.0)
+      step = 0.01;
+
+   lots = MathMax(minLot, MathMin(maxLot, lots));
+   lots = MathFloor(lots / step) * step;
+
+   return NormalizeDouble(lots, VolumeDigits());
+}
+//+------------------------------------------------------------------+
+double MinStopDistancePrice()
+{
+   double stops  = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   double freeze = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL) * _Point;
+
+   return MathMax(stops, freeze) + (2.0 * _Point);
+}
+//+------------------------------------------------------------------+
+bool IsTradingSession()
+{
+   if(!UseSessionFilter)
+      return true;
+
+   MqlDateTime tm;
+   TimeToStruct(TimeCurrent(), tm);
+
+   return (tm.hour >= LondonOpenHour && tm.hour < NYCloseHour);
+}
+//+------------------------------------------------------------------+
+bool IsOurPosition(ulong ticket)
+{
+   if(ticket == 0)
+      return false;
+
+   if(!PositionSelectByTicket(ticket))
+      return false;
+
+   if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+      return false;
+
+   if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+      return false;
+
+   return true;
+}
+//+------------------------------------------------------------------+
+double GetPositionProfit(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return 0.0;
+
+   return PositionGetDouble(POSITION_PROFIT);
+}
+//+------------------------------------------------------------------+
+double GetPositionVolume(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return 0.0;
+
+   return PositionGetDouble(POSITION_VOLUME);
+}
+//+------------------------------------------------------------------+
+double GetPositionOpenPrice(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return 0.0;
+
+   return PositionGetDouble(POSITION_PRICE_OPEN);
+}
+//+------------------------------------------------------------------+
+double GetPositionSL(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return 0.0;
+
+   return PositionGetDouble(POSITION_SL);
+}
+//+------------------------------------------------------------------+
+double GetPositionTP(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return 0.0;
+
+   return PositionGetDouble(POSITION_TP);
+}
+//+------------------------------------------------------------------+
+int GetPositionType(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return -1;
+
+   return (int)PositionGetInteger(POSITION_TYPE);
+}
+//+------------------------------------------------------------------+
+double CurrentProfitPips(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return 0.0;
+
+   double pip  = PipPoint();
+   double open = GetPositionOpenPrice(ticket);
+   int type    = GetPositionType(ticket);
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   if(type == POSITION_TYPE_BUY)
+      return (bid - open) / pip;
+
+   if(type == POSITION_TYPE_SELL)
+      return (open - ask) / pip;
+
+   return 0.0;
+}
+//+------------------------------------------------------------------+
+double CurrentAdversePips(ulong ticket)
+{
+   return MathMax(0.0, -CurrentProfitPips(ticket));
+}
+double GetClosedPositionNetProfit(const ulong positionId)
+{
+   if(positionId == 0)
+      return 0.0;
+
+   datetime fromTime = (datetime)(TimeCurrent() - 86400 * 90);
+
+   if(!HistorySelect(fromTime, TimeCurrent()))
+      return 0.0;
+
+   double total = 0.0;
+   int deals = HistoryDealsTotal();
+
+   for(int i = 0; i < deals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0)
+         continue;
+
+      if((ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID) != positionId)
+         continue;
+
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol)
+         continue;
+
+      if((int)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber)
+         continue;
+
+      total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+      total += HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+      total += HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+   }
+
+   return total;
+}
+//+------------------------------------------------------------------+
+//| Pair slot helpers                                                |
+//+------------------------------------------------------------------+
+void ResetPairSlot(int idx)
+{
+   if(idx < 0 || idx >= ArraySize(g_Pairs))
+      return;
+
+   g_Pairs[idx].primaryTicket          = 0;
+   g_Pairs[idx].hedgeTicket            = 0;
+   g_Pairs[idx].hedgeBlockedUntil      = 0;
+   g_Pairs[idx].realizedRecoveryProfit = 0.0;
+}
+//+------------------------------------------------------------------+
+int FindFreePairSlot()
+{
+   for(int i = 0; i < ArraySize(g_Pairs); i++)
+   {
+      bool primaryAlive = IsOurPosition(g_Pairs[i].primaryTicket);
+      bool hedgeAlive   = IsOurPosition(g_Pairs[i].hedgeTicket);
+
+      if(!primaryAlive && !hedgeAlive)
+      {
+         ResetPairSlot(i);
+         return i;
+      }
+   }
+
+   return -1;
+}
+//+------------------------------------------------------------------+
+int CountActivePairs()
+{
+   int cnt = 0;
+
+   for(int i = 0; i < ArraySize(g_Pairs); i++)
+   {
+      if(IsOurPosition(g_Pairs[i].primaryTicket))
+         cnt++;
+   }
+
+   return cnt;
+}
+//+------------------------------------------------------------------+
+bool HedgeCooldownComplete(int slot)
+{
+   if(slot < 0 || slot >= ArraySize(g_Pairs))
+      return false;
+
+   if(HedgeReopenCooldownSeconds <= 0)
+      return true;
+
+   return (TimeCurrent() >= g_Pairs[slot].hedgeBlockedUntil);
+}
+
+//+------------------------------------------------------------------+
+//| Messaging                                                        |
+//+------------------------------------------------------------------+
+void SendSignal(const string sig)
+{
+   string msg = EA_Name + " " + _Symbol + " -> " + sig + " signal";
+
+   if(EnableAlerts)
+      Alert(msg);
+
+   if(EnableNotifications)
+      SendNotification(msg);
+
+   if(EnableEmail)
+      SendMail(EA_Name + " Signal", msg);
+
+   Print(msg);
+}
+
+//+------------------------------------------------------------------+
+//| Trade helpers                                                    |
+//+------------------------------------------------------------------+
+void BuildEntryStops(ENUM_ORDER_TYPE type, double &sl, double &tp)
+{
+   double pip     = PipPoint();
+   double minDist = MinStopDistancePrice();
+
+   double bid   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double price = (type == ORDER_TYPE_BUY) ? ask : bid;
+
+   double slDist = MathMax(StopLossPips * pip, minDist);
+   double tpDist = MathMax(TakeProfitPips * pip, minDist);
+
+   if(type == ORDER_TYPE_BUY)
+   {
+      sl = price - slDist;
+      tp = price + tpDist;
+   }
+   else
+   {
+      sl = price + slDist;
+      tp = price - tpDist;
+   }
+
+   sl = NormalizeDouble(sl, _Digits);
+   tp = NormalizeDouble(tp, _Digits);
+}
+//+------------------------------------------------------------------+
+bool SafeModifySL(ulong ticket, double newSL)
+{
+   if(!IsOurPosition(ticket))
+      return false;
+
+   int type     = GetPositionType(ticket);
+   double tp    = GetPositionTP(ticket);
+   double curSL = GetPositionSL(ticket);
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double minDist = MinStopDistancePrice();
+
+   newSL = NormalizeDouble(newSL, _Digits);
+
+   if(type == POSITION_TYPE_BUY)
+   {
+      double maxAllowed = NormalizeDouble(bid - minDist, _Digits);
+      if(newSL > maxAllowed)
+         newSL = maxAllowed;
+
+      if(newSL <= 0.0)
+         return false;
+
+      if(curSL > 0.0 && newSL <= (curSL + _Point))
+         return false;
+   }
+   else if(type == POSITION_TYPE_SELL)
+   {
+      double minAllowed = NormalizeDouble(ask + minDist, _Digits);
+      if(newSL < minAllowed)
+         newSL = minAllowed;
+
+      if(newSL <= 0.0)
+         return false;
+
+      if(curSL > 0.0 && newSL >= (curSL - _Point))
+         return false;
+   }
+   else
+   {
+      return false;
+   }
+
+   if(DebugMode)
+      PrintFormat("[%s] Modifying SL ticket=%I64u newSL=%.5f", EA_Name, ticket, newSL);
+
+   return trade.PositionModify(ticket, newSL, tp);
+}
+//+------------------------------------------------------------------+
+void ManagePositionProtection(ulong ticket, bool isHedge)
+{
+   if(!IsOurPosition(ticket))
+      return;
+
+   int type       = GetPositionType(ticket);
+   double open    = GetPositionOpenPrice(ticket);
+   double curSL   = GetPositionSL(ticket);
+   double profitP = CurrentProfitPips(ticket);
+   double pip     = PipPoint();
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // Break-even
+   if(UseBreakEven && profitP >= BreakEvenTriggerPips)
+   {
+      double beSL = 0.0;
+
+      if(type == POSITION_TYPE_BUY)
+      {
+         beSL = open + (BreakEvenPlusPips * pip);
+         if(curSL < beSL || curSL == 0.0)
+            SafeModifySL(ticket, beSL);
+      }
+      else if(type == POSITION_TYPE_SELL)
+      {
+         beSL = open - (BreakEvenPlusPips * pip);
+         if(curSL > beSL || curSL == 0.0)
+            SafeModifySL(ticket, beSL);
+      }
+   }
+
+   // Trailing
+   bool trailingEnabled = UseTrailingStop &&
+                          ((isHedge && UseHedgeTrailing) || (!isHedge && UsePrimaryTrailing));
+
+   double trailStart = isHedge ? HedgeTrailingStartPips : TrailingStartPips;
+   double trailStep  = isHedge ? HedgeTrailingStepPips  : TrailingStepPips;
+
+   if(trailingEnabled && profitP >= trailStart)
+   {
+      double trailSL = 0.0;
+
+      if(type == POSITION_TYPE_BUY)
+      {
+         trailSL = bid - (trailStep * pip);
+         if(curSL < trailSL || curSL == 0.0)
+            SafeModifySL(ticket, trailSL);
+      }
+      else if(type == POSITION_TYPE_SELL)
+      {
+         trailSL = ask + (trailStep * pip);
+         if(curSL > trailSL || curSL == 0.0)
+            SafeModifySL(ticket, trailSL);
+      }
+   }
+}
+//+------------------------------------------------------------------+
+bool ClosePositionByTicket(ulong ticket)
+{
+   if(!IsOurPosition(ticket))
+      return true;
+
+   bool ok = trade.PositionClose(ticket);
+
+   if(!ok && DebugMode)
+      PrintFormat("[%s] Failed closing ticket=%I64u ret=%d", EA_Name, ticket, trade.ResultRetcode());
+
+   return ok;
+}
+//+------------------------------------------------------------------+
+ulong FindNewestPositionByComment(const string comment, int expectedType, double lots)
+{
+   ulong bestTicket = 0;
+   datetime bestTime = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0)
+         continue;
+
+      if(!PositionSelectByTicket(t))
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+
+      if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+         continue;
+
+      if(PositionGetString(POSITION_COMMENT) != comment)
+         continue;
+
+      if((int)PositionGetInteger(POSITION_TYPE) != expectedType)
+         continue;
+
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      if(MathAbs(vol - lots) > 0.0000001)
+         continue;
+
+      datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+      if(pt >= bestTime)
+      {
+         bestTime = pt;
+         bestTicket = t;
+      }
+   }
+
+   return bestTicket;
+}
+//+------------------------------------------------------------------+
+bool OpenManagedTrade(ENUM_ORDER_TYPE type, double lots, int slot, bool isHedge, ulong &ticketOut)
+{
+   ticketOut = 0;
+   lots = NormalizeVolume(lots);
+
+   if(lots <= 0.0)
+      return false;
+
+   double sl = 0.0, tp = 0.0;
+   BuildEntryStops(type, sl, tp);
+
+   string comment = StringFormat("MCHS_%s_%d_%d",
+                                 (isHedge ? "H" : "P"),
+                                 slot + 1,
+                                 (int)(TimeCurrent() % 100000));
+
+   bool ok = false;
+   if(type == ORDER_TYPE_BUY)
+      ok = trade.Buy(lots, _Symbol, 0.0, sl, tp, comment);
+   else
+      ok = trade.Sell(lots, _Symbol, 0.0, sl, tp, comment);
+
+   if(!ok)
+   {
+      PrintFormat("[%s] Open failed type=%s slot=%d lots=%.2f ret=%d",
+                  EA_Name, EnumToString(type), slot, lots, trade.ResultRetcode());
+      return false;
+   }
+
+   Sleep(100);
+
+   ulong candidate = (ulong)trade.ResultOrder();
+   if(candidate > 0 && IsOurPosition(candidate))
+   {
+      ticketOut = candidate;
+   }
+   else
+   {
+      int expectedPosType = (type == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ticketOut = FindNewestPositionByComment(comment, expectedPosType, lots);
+   }
+
+   if(ticketOut == 0)
+   {
+      PrintFormat("[%s] Trade opened but ticket mapping failed for slot=%d", EA_Name, slot);
+      return false;
+   }
+
+   if(DebugMode)
+   {
+      PrintFormat("[%s] Opened %s slot=%d lots=%.2f ticket=%I64u isHedge=%s",
+                  EA_Name, EnumToString(type), slot, lots, ticketOut, (isHedge ? "Y" : "N"));
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Housekeeping                                                     |
+//+------------------------------------------------------------------+
+void CloseNegativeTrades()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+
+      if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+         continue;
+
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      if(profit < 0.0)
+      {
+         if(trade.PositionClose(ticket))
+            PrintFormat("[%s] Closed negative trade at EOD (ticket=%I64u profit=%.2f)", EA_Name, ticket, profit);
+      }
+   }
+}
+//+------------------------------------------------------------------+
+void RunEODClose()
+{
+   if(!UseSessionFilter || !CloseNegativeAtEndOfDay)
+      return;
+
+   MqlDateTime tm;
+   TimeToStruct(TimeCurrent(), tm);
+
+   if(tm.hour < NYCloseHour)
+      return;
+
+   if(g_LastClosedDay == tm.day_of_year)
+      return;
+
+   CloseNegativeTrades();
+   g_LastClosedDay = tm.day_of_year;
+}
+//+------------------------------------------------------------------+
+
+void SyncPairSlots()
+{
+   for(int i = 0; i < ArraySize(g_Pairs); i++)
+   {
+      bool primaryAlive = IsOurPosition(g_Pairs[i].primaryTicket);
+      bool hedgeAlive   = IsOurPosition(g_Pairs[i].hedgeTicket);
+
+      if(!primaryAlive)
+         g_Pairs[i].primaryTicket = 0;
+
+      // Hedge disappeared while primary still alive -> bank result + cooldown
+      if(g_Pairs[i].hedgeTicket != 0 && !hedgeAlive)
+      {
+         if(g_Pairs[i].primaryTicket != 0)
+         {
+            double hedgeNet = GetClosedPositionNetProfit(g_Pairs[i].hedgeTicket);
+            g_Pairs[i].realizedRecoveryProfit += hedgeNet;
+            g_Pairs[i].hedgeBlockedUntil = TimeCurrent() + HedgeReopenCooldownSeconds;
+
+            if(DebugMode)
+            {
+               PrintFormat("[%s] Hedge closed for slot=%d, realizedRecovery=%.2f totalRecovery=%.2f blockedUntil=%s",
+                           EA_Name,
+                           i,
+                           hedgeNet,
+                           g_Pairs[i].realizedRecoveryProfit,
+                           TimeToString(g_Pairs[i].hedgeBlockedUntil, TIME_DATE | TIME_SECONDS));
+            }
+         }
+
+         g_Pairs[i].hedgeTicket = 0;
+      }
+
+      // Primary gone but hedge still alive -> close orphan hedge
+      if(g_Pairs[i].primaryTicket == 0 && hedgeAlive)
+      {
+         if(DebugMode)
+         {
+            PrintFormat("[%s] Primary gone, closing orphan hedge ticket=%I64u",
+                        EA_Name, g_Pairs[i].hedgeTicket);
+         }
+
+         ClosePositionByTicket(g_Pairs[i].hedgeTicket);
+         g_Pairs[i].hedgeTicket = 0;
+      }
+
+      if(g_Pairs[i].primaryTicket == 0 && g_Pairs[i].hedgeTicket == 0)
+         ResetPairSlot(i);
+   }
+}
+//+------------------------------------------------------------------+
+//| Pair management                                                  |
+//+------------------------------------------------------------------+
+void ManagePairs()
+{
+   SyncPairSlots();
+
+   for(int i = 0; i < ArraySize(g_Pairs); i++)
+   {
+      ulong primary = g_Pairs[i].primaryTicket;
+      ulong hedge   = g_Pairs[i].hedgeTicket;
+
+      if(primary == 0 || !IsOurPosition(primary))
+         continue;
+
+      // --- Primary protection
+      ManagePositionProtection(primary, false);
+
+      // Primary may have closed during protection
+      if(!IsOurPosition(primary))
+      {
+         g_Pairs[i].primaryTicket = 0;
+
+         if(hedge != 0 && IsOurPosition(hedge))
+         {
+            if(DebugMode)
+               PrintFormat("[%s] Primary gone, closing orphan hedge ticket=%I64u", EA_Name, hedge);
+
+            ClosePositionByTicket(hedge);
+            g_Pairs[i].hedgeTicket = 0;
+         }
+
+         ResetPairSlot(i);
+         continue;
+      }
+
+      primary = g_Pairs[i].primaryTicket;
+      hedge   = g_Pairs[i].hedgeTicket;
+
+      // --- Existing hedge protection
+      if(hedge != 0 && IsOurPosition(hedge))
+      {
+         ManagePositionProtection(hedge, true);
+
+         // Hedge may have closed during protection -> bank result immediately + block reopen
+         if(!IsOurPosition(hedge))
+         {
+            double hedgeNet = GetClosedPositionNetProfit(hedge);
+            g_Pairs[i].realizedRecoveryProfit += hedgeNet;
+            g_Pairs[i].hedgeTicket = 0;
+            g_Pairs[i].hedgeBlockedUntil = TimeCurrent() + HedgeReopenCooldownSeconds;
+
+            if(DebugMode)
+            {
+               PrintFormat("[%s] Hedge closed for slot=%d, realizedRecovery=%.2f totalRecovery=%.2f blockedUntil=%s",
+                           EA_Name,
+                           i,
+                           hedgeNet,
+                           g_Pairs[i].realizedRecoveryProfit,
+                           TimeToString(g_Pairs[i].hedgeBlockedUntil, TIME_DATE | TIME_SECONDS));
+            }
+
+            continue; // keep same-tick reopen blocked
+         }
+      }
+
+      primary = g_Pairs[i].primaryTicket;
+      hedge   = g_Pairs[i].hedgeTicket;
+
+      double primaryProfit   = GetPositionProfit(primary);
+      double primaryLossNow  = MathMax(0.0, -primaryProfit);
+      double openHedgeProfit = 0.0;
+
+      if(hedge != 0 && IsOurPosition(hedge))
+         openHedgeProfit = GetPositionProfit(hedge);
+
+      double linkedRecoveryTotal = g_Pairs[i].realizedRecoveryProfit + openHedgeProfit;
+
+      // --- NEW OPTIONAL CLOSE RULE
+      // total linked recovery >= current primary loss * 2.0 * 1.05
+      if(UseLinkedRecoveryDoubleClose &&
+         hedge != 0 && IsOurPosition(hedge) &&
+         primaryLossNow > 0.0)
+      {
+         double linkedTarget = primaryLossNow * 2.0 * (1.0 + LinkedRecoveryDoubleCloseExtraPercent / 100.0);
+
+         if(linkedRecoveryTotal >= linkedTarget)
+         {
+            if(DebugMode)
+            {
+               PrintFormat("[%s] Linked recovery double close. slot=%d primary=%I64u lossNow=%.2f recoveryTotal=%.2f target=%.2f hedge=%I64u",
+                           EA_Name,
+                           i,
+                           primary,
+                           primaryLossNow,
+                           linkedRecoveryTotal,
+                           linkedTarget,
+                           hedge);
+            }
+
+            ClosePositionByTicket(hedge);
+            ClosePositionByTicket(primary);
+            ResetPairSlot(i);
+            continue;
+         }
+      }
+
+      // --- ORIGINAL CLOSE RULE (unchanged)
+      if(primary != 0 && hedge != 0 &&
+         IsOurPosition(primary) && IsOurPosition(hedge))
+      {
+         primaryProfit = GetPositionProfit(primary);
+         double hedgeProfit = GetPositionProfit(hedge);
+         double pairProfit  = primaryProfit + hedgeProfit;
+
+         if(primaryProfit < 0.0 && pairProfit >= 0.0)
+         {
+            if(DebugMode)
+            {
+               PrintFormat("[%s] Pair recovered. Closing both. slot=%d primary=%I64u(%.2f) hedge=%I64u(%.2f) pair=%.2f",
+                           EA_Name, i, primary, primaryProfit, hedge, hedgeProfit, pairProfit);
+            }
+
+            ClosePositionByTicket(hedge);
+            ClosePositionByTicket(primary);
+
+            ResetPairSlot(i);
+            continue;
+         }
+      }
+
+      double adversePips = CurrentAdversePips(primary);
+      bool hedgeMissing  = (hedge == 0 || !IsOurPosition(hedge));
+      bool canOpenHedge  = HedgeCooldownComplete(i);
+
+      // --- Open hedge if needed and allowed
+      if(hedgeMissing &&
+         primaryProfit < 0.0 &&
+         adversePips >= HedgeTriggerPips &&
+         canOpenHedge)
+      {
+         int pType = GetPositionType(primary);
+         ENUM_ORDER_TYPE hedgeType = (pType == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+         double hedgeLots = GetPositionVolume(primary) * HedgeLotMultiplier;
+         ulong hedgeTicket = 0;
+
+         if(OpenManagedTrade(hedgeType, hedgeLots, i, true, hedgeTicket))
+         {
+            g_Pairs[i].hedgeTicket = hedgeTicket;
+
+            if(DebugMode)
+            {
+               PrintFormat("[%s] Hedge opened for slot=%d primary=%I64u hedge=%I64u adversePips=%.1f linkedRecovery=%.2f",
+                           EA_Name,
+                           i,
+                           primary,
+                           hedgeTicket,
+                           adversePips,
+                           g_Pairs[i].realizedRecoveryProfit);
+            }
+         }
+      }
+      else if(hedgeMissing &&
+              primaryProfit < 0.0 &&
+              adversePips >= HedgeTriggerPips &&
+              !canOpenHedge)
+      {
+         if(DebugMode)
+         {
+            PrintFormat("[%s] Hedge reopen blocked by cooldown. slot=%d primary=%I64u blockedUntil=%s",
+                        EA_Name,
+                        i,
+                        primary,
+                        TimeToString(g_Pairs[i].hedgeBlockedUntil, TIME_DATE | TIME_SECONDS));
+         }
+      }
+   }
+}
+//+------------------------------------------------------------------+
+//| Signal logic                                                     |
+//+------------------------------------------------------------------+
+bool IsNewCandle()
+{
+   datetime t = iTime(_Symbol, _Period, 0);
+
+   if(t == lastCandleTime)
+      return false;
+
+   lastCandleTime = t;
+   return true;
+}
+//+------------------------------------------------------------------+
+ENUM_TRADE_SIGNAL GetSignal()
+{
+   if(CopyBuffer(FastMAHandle, 0, 0, 3, FastMA) < 3)
+      return SIGNAL_NEUTRAL;
+
+   if(CopyBuffer(SlowMAHandle, 0, 0, 3, SlowMA) < 3)
+      return SIGNAL_NEUTRAL;
+
+   if(FastMA[2] <= SlowMA[2] && FastMA[1] > SlowMA[1])
+      return SIGNAL_BUY;
+
+   if(FastMA[2] >= SlowMA[2] && FastMA[1] < SlowMA[1])
+      return SIGNAL_SELL;
+
+   return SIGNAL_NEUTRAL;
+}
+//+------------------------------------------------------------------+
+void OpenPrimariesForSignal(ENUM_TRADE_SIGNAL signal)
+{
+   if(signal == SIGNAL_NEUTRAL)
+      return;
+
+   if(!IsTradingSession())
+      return;
+
+   int activePairs = CountActivePairs();
+   int slotsLeft   = g_MaxPairsRuntime - activePairs;
+
+   if(slotsLeft <= 0)
+      return;
+
+   int toOpen = MathMin(g_TradesPerSignalRuntime, slotsLeft);
+   ENUM_ORDER_TYPE orderType = (signal == SIGNAL_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+
+   for(int n = 0; n < toOpen; n++)
+   {
+      int slot = FindFreePairSlot();
+      if(slot < 0)
+         break;
+
+      ulong primaryTicket = 0;
+      if(OpenManagedTrade(orderType, LotSize, slot, false, primaryTicket))
+      {
+         g_Pairs[slot].primaryTicket     = primaryTicket;
+         g_Pairs[slot].hedgeTicket       = 0;
+         g_Pairs[slot].hedgeBlockedUntil = 0;
+      }
+   }
+
+   SendSignal(signal == SIGNAL_BUY ? "BUY" : "SELL");
+}
+
+//+------------------------------------------------------------------+
+//| Standard events                                                  |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   Print(EA_Name, ": Init v2.32");
+
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(20);
+   trade.SetTypeFillingBySymbol(_Symbol);
+
+   FastMAHandle = iMA(_Symbol, _Period, MAFastPeriod, 0, MAFastMethod, MAFastPrice);
+   SlowMAHandle = iMA(_Symbol, _Period, MASlowPeriod, 0, MASlowMethod, MASlowPrice);
+
+   if(FastMAHandle == INVALID_HANDLE || SlowMAHandle == INVALID_HANDLE)
+   {
+      Print("MA handle error");
+      return(INIT_FAILED);
+   }
+
+   ArraySetAsSeries(FastMA, true);
+   ArraySetAsSeries(SlowMA, true);
+
+   g_MaxPairsRuntime = MathMax(1, MaxPairs);
+   g_TradesPerSignalRuntime = MathMax(1, TradesPerSignal);
+
+   ArrayResize(g_Pairs, g_MaxPairsRuntime);
+   for(int i = 0; i < ArraySize(g_Pairs); i++)
+      ResetPairSlot(i);
+
+   return(INIT_SUCCEEDED);
+}
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(FastMAHandle != INVALID_HANDLE)
+      IndicatorRelease(FastMAHandle);
+
+   if(SlowMAHandle != INVALID_HANDLE)
+      IndicatorRelease(SlowMAHandle);
+}
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   RunEODClose();
+   ManagePairs();
+
+   if(!IsNewCandle())
+      return;
+
+   ENUM_TRADE_SIGNAL signal = GetSignal();
+   OpenPrimariesForSignal(signal);
+}
+//+------------------------------------------------------------------+
