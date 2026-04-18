@@ -1,0 +1,414 @@
+//+------------------------------------------------------------------+
+//| MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD)         |
+//+------------------------------------------------------------------+
+#property copyright "OpenAI"
+#property version   "3.00"
+#property strict
+
+#include <Trade/Trade.mqh>
+
+//--- Input parameters
+input string  EA_Name = "MA_Crossover_Simple";
+input double  LotSize = 0.10;
+input double  StopLossPips = 1500.0;
+input double  TakeProfitPips = 1000.0;
+input int     MAFastPeriod = 1;
+input ENUM_MA_METHOD MAFastMethod = MODE_EMA;
+input ENUM_APPLIED_PRICE MAFastPrice = PRICE_CLOSE;
+input int     MASlowPeriod = 3;
+input ENUM_MA_METHOD MASlowMethod = MODE_SMA;
+input ENUM_APPLIED_PRICE MASlowPrice = PRICE_CLOSE;
+input int     MagicNumber = 17635;
+input bool    EnableAlerts = false;
+input bool    EnableNotifications = false;
+input bool    EnableEmail = false;
+input bool    UseTrailingStop = true;
+input double  TrailingStartPips = 200.0;
+input double  TrailingStepPips = 50.0;
+input bool    UseBreakEven = true;
+input double  BreakEvenTriggerPips = 200.0;
+input double  BreakEvenPlusPips = 25.0;
+input int     MaxPairs = 1;
+input int     TradesPerSignal = 1;
+input bool    UseSessionFilter = false;
+input int     LondonOpenHour = 8;
+input int     NYCloseHour = 22;
+input bool    DebugMode = true;
+
+
+//--- ENUMS ---
+enum ENUM_TRADE_SIGNAL { SIGNAL_BUY = 1, SIGNAL_SELL = -1, SIGNAL_NEUTRAL = 0 };
+//--- GLOBALS ---
+CTrade trade;
+int FastMAHandle = INVALID_HANDLE, SlowMAHandle = INVALID_HANDLE;
+double FastMA[], SlowMA[];
+datetime lastCandleTime = 0;
+
+struct TradeSlot { ulong ticket; };
+TradeSlot g_Trades[];
+int g_MaxPairsRuntime = 1, g_TradesPerSignalRuntime = 1;
+
+double InitialBalance = 0.0;
+bool MaxDrawdownHit = false;
+bool ProfitTargetHit = false;
+
+//--- Helper functions ---
+
+double PipPoint() {
+   if(_Digits == 3 || _Digits == 5)
+      return (_Point * 10.0);
+   return _Point;
+}
+double MinStopDistancePrice() {
+   double stops  = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   double freeze = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL) * _Point;
+   return MathMax(stops, freeze) + (2.0 * _Point);
+}
+int VolumeDigits() {
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step <= 0.0)
+      return 2;
+   int digits = 0;
+   while(step < 1.0 && digits < 8) { step *= 10.0; digits++; }
+   return digits;
+}
+double NormalizeVolume(double lots) {
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step <= 0.0) step = 0.01;
+   lots = MathMax(minLot, MathMin(maxLot, lots));
+   lots = MathFloor(lots / step) * step;
+   return NormalizeDouble(lots, VolumeDigits());
+}
+bool IsTradingSession() {
+   if(!UseSessionFilter) return true;
+   MqlDateTime tm; TimeToStruct(TimeCurrent(), tm);
+   return (tm.hour >= LondonOpenHour && tm.hour < NYCloseHour);
+}
+int FindFreeTradeSlot() {
+   for(int i=0; i<ArraySize(g_Trades); i++)
+      if(g_Trades[i].ticket == 0) return i;
+   return -1;
+}
+int CountActiveTrades() {
+   int cnt = 0;
+   for(int i=0; i<ArraySize(g_Trades); i++)
+      if(g_Trades[i].ticket != 0 && PositionSelectByTicket(g_Trades[i].ticket))
+         cnt++;
+   return cnt;
+}
+
+void BuildEntryStops(ENUM_ORDER_TYPE type, double &sl, double &tp) {
+   double pip = PipPoint(), minDist = MinStopDistancePrice();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double price = (type == ORDER_TYPE_BUY) ? ask : bid;
+   double slDist = MathMax(StopLossPips * pip, minDist);
+   double tpDist = MathMax(TakeProfitPips * pip, minDist);
+
+   if(type == ORDER_TYPE_BUY) { sl = price - slDist; tp = price + tpDist; }
+   else { sl = price + slDist; tp = price - tpDist; }
+   sl = NormalizeDouble(sl, _Digits); tp = NormalizeDouble(tp, _Digits);
+}
+
+void ManagePositionProtection(ulong ticket) {
+   if(!PositionSelectByTicket(ticket)) return;
+   int type = (int)PositionGetInteger(POSITION_TYPE);
+   double open = PositionGetDouble(POSITION_PRICE_OPEN);
+   double curSL = PositionGetDouble(POSITION_SL);
+   double pip = PipPoint();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double profitP = (type==POSITION_TYPE_BUY) ? (bid-open)/pip : (open-ask)/pip;
+
+   // Break-even logic
+   if(UseBreakEven && profitP >= BreakEvenTriggerPips) {
+      double beSL = (type==POSITION_TYPE_BUY)
+         ? open+BreakEvenPlusPips*pip
+         : open-BreakEvenPlusPips*pip;
+      if(curSL == 0.0 ||
+         (type==POSITION_TYPE_BUY && curSL < beSL) ||
+         (type==POSITION_TYPE_SELL && curSL > beSL))
+         trade.PositionModify(ticket, beSL, PositionGetDouble(POSITION_TP));
+   }
+
+   // Trailing
+   if(UseTrailingStop && profitP >= TrailingStartPips) {
+      double trailSL = (type==POSITION_TYPE_BUY)
+            ? bid - TrailingStepPips * pip
+            : ask + TrailingStepPips * pip;
+      if(curSL == 0.0 ||
+         (type==POSITION_TYPE_BUY && curSL < trailSL) ||
+         (type==POSITION_TYPE_SELL && curSL > trailSL))
+         trade.PositionModify(ticket, trailSL, PositionGetDouble(POSITION_TP));
+   }
+}
+
+void ManageTrades() {
+   for(int i=0;i<ArraySize(g_Trades);i++) {
+      ulong t = g_Trades[i].ticket;
+      if(t == 0) continue;
+      if(!PositionSelectByTicket(t)) { g_Trades[i].ticket = 0; continue; }
+      ManagePositionProtection(t);
+   }
+}
+
+//--- Signals and Trading ---
+bool IsNewCandle() {
+   datetime t = iTime(_Symbol, _Period, 0);
+   if(t == lastCandleTime) return false;
+   lastCandleTime = t;
+   return true;
+}
+
+ENUM_TRADE_SIGNAL GetSignal() {
+   if(CopyBuffer(FastMAHandle,0,0,3,FastMA)<3) return SIGNAL_NEUTRAL;
+   if(CopyBuffer(SlowMAHandle,0,0,3,SlowMA)<3) return SIGNAL_NEUTRAL;
+   if(FastMA[2]<=SlowMA[2] && FastMA[1]>SlowMA[1]) return SIGNAL_BUY;
+   if(FastMA[2]>=SlowMA[2] && FastMA[1]<SlowMA[1]) return SIGNAL_SELL;
+   return SIGNAL_NEUTRAL;
+}
+
+void OpenTradesForSignal(ENUM_TRADE_SIGNAL signal) {
+   if(signal == SIGNAL_NEUTRAL) return;
+   if(!IsTradingSession()) return;
+   int active = CountActiveTrades();
+   int slotsLeft = g_MaxPairsRuntime - active;
+   if(slotsLeft<=0) return;
+   int toOpen = MathMin(g_TradesPerSignalRuntime, slotsLeft);
+   ENUM_ORDER_TYPE otype = (signal == SIGNAL_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   for(int n=0;n<toOpen;n++) {
+      int idx = FindFreeTradeSlot();
+      if(idx < 0) break;
+      double sl=0, tp=0;
+      BuildEntryStops(otype, sl, tp);
+      bool ok=false;
+      if(otype==ORDER_TYPE_BUY) ok=trade.Buy(LotSize,_Symbol,0,sl,tp);
+      else ok=trade.Sell(LotSize,_Symbol,0,sl,tp);
+      if(ok) g_Trades[idx].ticket = trade.ResultOrder();
+      if(DebugMode)
+        PrintFormat("[%s] Opened %s slot=%d lots=%.2f ticket=%I64u",
+          EA_Name, EnumToString(otype), idx, LotSize, trade.ResultOrder());
+   }
+   // Optional: alert, notification, or email
+   string msg = EA_Name + " " + _Symbol + " -> " + (signal==SIGNAL_BUY ? "BUY":"SELL") + " signal";
+   if(EnableAlerts) Alert(msg);
+   if(EnableNotifications) SendNotification(msg);
+   if(EnableEmail) SendMail(EA_Name + " Signal", msg);
+   Print(msg);
+}
+input double ProfitTargetPercent = 100.0;   // Profit target percent from initial balance (0=off)
+input int    ProfitTargetAction = 1;        // 0=notify only, 1=notify & shutdown trading
+input bool   EnableProfitTargetNotification = true; // Always notify profit target
+input bool   EnableMaxLossNotification = true;      // Always notify max loss/drawdown
+input double MaxDrawdownPercent = 20.0;     // Max drawdown percent (0=off), triggers shutdown
+//--- Standard events ---
+int OnInit() {
+ // ...
+   InitialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   MaxDrawdownHit = false;
+   Print(EA_Name, ": Init v3.00");
+   trade.SetExpertMagicNumber(MagicNumber);
+   trade.SetDeviationInPoints(20);
+   trade.SetTypeFillingBySymbol(_Symbol);
+   FastMAHandle = iMA(_Symbol, _Period, MAFastPeriod, 0, MAFastMethod, MAFastPrice);
+   SlowMAHandle = iMA(_Symbol, _Period, MASlowPeriod, 0, MASlowMethod, MASlowPrice);
+   if(FastMAHandle == INVALID_HANDLE || SlowMAHandle == INVALID_HANDLE) {
+      Print("MA handle error");
+      return(INIT_FAILED);
+        InitialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    ProfitTargetHit = false;
+    MaxDrawdownHit = false;
+   }
+   ArraySetAsSeries(FastMA, true);
+   ArraySetAsSeries(SlowMA, true);
+   g_MaxPairsRuntime = MathMax(1, MaxPairs);
+   g_TradesPerSignalRuntime = MathMax(1, TradesPerSignal);
+   ArrayResize(g_Trades, g_MaxPairsRuntime);
+   for(int i=0;i<ArraySize(g_Trades);i++) g_Trades[i].ticket=0;
+   return(INIT_SUCCEEDED);
+}
+
+
+void OnDeinit(const int reason) {
+   if(FastMAHandle != INVALID_HANDLE) IndicatorRelease(FastMAHandle);
+   if(SlowMAHandle != INVALID_HANDLE) IndicatorRelease(SlowMAHandle);
+}
+
+void OnTick() {
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+
+    // ---- PROFIT TARGET ----
+    if(ProfitTargetPercent > 0 && !ProfitTargetHit) {
+        double profitPercent = 100.0 * (equity - InitialBalance) / InitialBalance;
+        if(profitPercent >= ProfitTargetPercent) {
+            ProfitTargetHit = true;
+            string msg = StringFormat("[%s] PROFIT TARGET reached: %.2f%% (target: %.2f%%).", EA_Name, profitPercent, ProfitTargetPercent);
+            Print(msg);
+            if(EnableProfitTargetNotification) {
+                SendNotification(msg); // Always notify
+                SendMail(EA_Name + " Profit Target", msg);
+                Alert(msg);
+            }
+            if(ProfitTargetAction == 1) {
+                // Close all open trades, then stop further trading
+                for(int i=0;i<ArraySize(g_Trades);i++) {
+                    ulong t = g_Trades[i].ticket;
+                    if(t != 0 && PositionSelectByTicket(t))
+                        trade.PositionClose(t);
+                }
+                return;
+            }
+        }
+    }
+    if(ProfitTargetAction == 1 && ProfitTargetHit) return;
+
+    // ---- MAX LOSS/DRAWDOWN ----
+    if(MaxDrawdownPercent > 0 && !MaxDrawdownHit) {
+        double percentDrawdown = 100.0 * (InitialBalance - equity) / InitialBalance;
+        if(percentDrawdown >= MaxDrawdownPercent) {
+            MaxDrawdownHit = true;
+            string msg = StringFormat("[%s] MAX LOSS/DRAWDOWN triggered! Equity drawdown = %.2f%%, Max = %.2f%% -- Trading stopped.", EA_Name, percentDrawdown, MaxDrawdownPercent);
+            Print(msg);
+            if(EnableMaxLossNotification) {
+                SendNotification(msg); // Always notify
+                SendMail(EA_Name + " Max Loss", msg);
+                Alert(msg);
+            }
+            // Close all open trades:
+            for(int i=0;i<ArraySize(g_Trades);i++) {
+                ulong t = g_Trades[i].ticket;
+                if(t != 0 && PositionSelectByTicket(t))
+                    trade.PositionClose(t);
+            }
+            return;
+        }
+    }
+    if(MaxDrawdownHit) return;
+
+    // ---- YOUR NORMAL TRADING LOGIC FOLLOWS ----
+    ManageTrades();
+    if(!IsNewCandle()) return;
+    ENUM_TRADE_SIGNAL sig = GetSignal();
+    OpenTradesForSignal(sig);
+}
+
+SETTINGS FOR JANUARY 2025 TO MARCH 2026
+
+2026.04.18 09:52:08.145	MetaTester 5 started on 127.0.0.1:3000
+2026.04.18 09:52:08.162	cloud network mode is off
+2026.04.18 09:52:08.162	initialization finished
+2026.04.18 09:52:08.336	login (build 5800)
+2026.04.18 09:52:08.649	16516 bytes of account info loaded
+2026.04.18 09:52:08.649	1478 bytes of tester parameters loaded
+2026.04.18 09:52:08.649	14020 bytes of input parameters loaded
+2026.04.18 09:52:08.656	13571 bytes of symbols list loaded (1570 symbols)
+2026.04.18 09:52:08.656	expert file added: Experts\NO HEDGE MAX DRAWDOWN.ex5. 41839 bytes loaded
+2026.04.18 09:52:08.686	calculate profit in pips, initial deposit 100000, leverage 1:500
+2026.04.18 09:52:08.686	successfully initialized
+2026.04.18 09:52:08.686	58 Kb of total initialization data received
+2026.04.18 09:52:08.686	Intel Core i3-1005G1  @ 1.20GHz, 3877 MB
+2026.04.18 09:52:08.725	GOLD#: symbol to be synchronized
+2026.04.18 09:52:08.729	GOLD#: symbol synchronized, 3720 bytes of symbol info received
+2026.04.18 09:52:08.731	GOLD#: history synchronization started
+2026.04.18 09:52:08.735	GOLD#: load 25 bytes of history data to synchronize in 0:00:00.000
+2026.04.18 09:52:08.735	GOLD#: history synchronized from 2023.01.03 to 2026.04.17
+2026.04.18 09:52:08.801	GOLD#,M1: history cache allocated for 386006 bars and contains 354978 bars from 2024.01.02 01:00 to 2024.12.31 20:00
+2026.04.18 09:52:08.801	GOLD#,M1: history begins from 2024.01.02 01:00
+2026.04.18 09:52:08.804	GOLD#,M1 (XMGlobal-MT5 6): OHLC bar states generating. OnTick executed on the bar begin only
+2026.04.18 09:52:08.804	GOLD#,M1: testing of Experts\NO HEDGE MAX DRAWDOWN.ex5 from 2025.01.01 00:00 to 2025.01.31 00:00 started with inputs:
+2026.04.18 09:52:08.804	  EA_Name=MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD) 
+2026.04.18 09:52:08.804	  LotSize=0.1
+2026.04.18 09:52:08.804	  StopLossPips=400
+2026.04.18 09:52:08.804	  TakeProfitPips=25000
+2026.04.18 09:52:08.804	  MAFastPeriod=2
+2026.04.18 09:52:08.804	  MAFastMethod=1
+2026.04.18 09:52:08.804	  MAFastPrice=1
+2026.04.18 09:52:08.804	  MASlowPeriod=5
+2026.04.18 09:52:08.804	  MASlowMethod=0
+2026.04.18 09:52:08.804	  MASlowPrice=1
+2026.04.18 09:52:08.804	  MagicNumber=17635
+2026.04.18 09:52:08.804	  EnableAlerts=false
+2026.04.18 09:52:08.804	  EnableNotifications=false
+2026.04.18 09:52:08.804	  EnableEmail=false
+2026.04.18 09:52:08.804	  UseTrailingStop=true
+2026.04.18 09:52:08.804	  TrailingStartPips=5000.0
+2026.04.18 09:52:08.804	  TrailingStepPips=20
+2026.04.18 09:52:08.804	  UseBreakEven=true
+2026.04.18 09:52:08.804	  BreakEvenTriggerPips=1000
+2026.04.18 09:52:08.804	  BreakEvenPlusPips=500.0
+2026.04.18 09:52:08.804	  MaxPairs=1
+2026.04.18 09:52:08.804	  TradesPerSignal=1
+2026.04.18 09:52:08.804	  UseSessionFilter=false
+2026.04.18 09:52:08.804	  LondonOpenHour=8
+2026.04.18 09:52:08.804	  NYCloseHour=22
+2026.04.18 09:52:08.804	  DebugMode=true
+2026.04.18 09:52:08.804	  MaxDrawdownPercent=20.0
+2026.04.18 09:52:08.823	2025.01.01 00:00:00   MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD) : Init v3.00
+2026.04.18 09:52:10.867	2025.01.02 08:01:00   market buy 0.1 GOLD# sl: 2629.58 tp: 2883.58 (2633.42 / 2633.58 / 2633.42)
+2026.04.18 09:52:10.867	2025.01.02 08:01:00   deal #2 buy 0.1 GOLD# at 2633.58 done (based on order #2)
+2026.04.18 09:52:10.867	2025.01.02 08:01:00   deal performed [#2 buy 0.1 GOLD# at 2633.58]
+2026.04.18 09:52:10.867	2025.01.02 08:01:00   order performed buy 0.1 at 2633.58 [#2 buy 0.1 GOLD# at 2633.58]
+2026.04.18 09:52:10.869	2025.01.02 08:01:00   CTrade::OrderSend: market buy 0.10 GOLD# sl: 2629.58 tp: 2883.58 [done at 2633.58]
+2026.04.18 09:52:10.869	2025.01.02 08:01:00   [MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD) ] Opened ORDER_TYPE_BUY slot=0 lots=0.10 ticket=2
+2026.04.18 09:52:10.869	2025.01.02 08:01:00   MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD)  GOLD# -> BUY signal
+   TRADES MONTHLY JANUSRY - 387 FEB - 2331 MARCH -970 APRIL + 2961  MAY -873 JUNE -928 JULY -1564  AUGUST -1365  SEPTEMBER -3133  OCT 1504  NOVEMBER +1311 DECEMBER-151 JANUSRY 2026 +5028 FEB 2026 -9876 MARCH 2026 12255
+
+SETTINGS SAME SETTINGS WITH A WIDE STOPLOSS
+2026.04.18 10:14:42.099	MetaTester 5 started on 127.0.0.1:3000
+2026.04.18 10:14:42.116	cloud network mode is off
+2026.04.18 10:14:42.116	initialization finished
+2026.04.18 10:14:42.315	login (build 5800)
+2026.04.18 10:14:42.549	16516 bytes of account info loaded
+2026.04.18 10:14:42.549	1478 bytes of tester parameters loaded
+2026.04.18 10:14:42.549	14020 bytes of input parameters loaded
+2026.04.18 10:14:42.552	13571 bytes of symbols list loaded (1570 symbols)
+2026.04.18 10:14:42.552	expert file added: Experts\NO HEDGE MAX DRAWDOWN.ex5. 41839 bytes loaded
+2026.04.18 10:14:42.586	calculate profit in pips, initial deposit 100000, leverage 1:500
+2026.04.18 10:14:42.586	successfully initialized
+2026.04.18 10:14:42.586	58 Kb of total initialization data received
+2026.04.18 10:14:42.587	Intel Core i3-1005G1  @ 1.20GHz, 3877 MB
+2026.04.18 10:14:42.619	GOLD#: symbol to be synchronized
+2026.04.18 10:14:42.620	GOLD#: symbol synchronized, 3720 bytes of symbol info received
+2026.04.18 10:14:42.621	GOLD#: history synchronization started
+2026.04.18 10:14:42.624	GOLD#: load 25 bytes of history data to synchronize in 0:00:00.001
+2026.04.18 10:14:42.624	GOLD#: history synchronized from 2023.01.03 to 2026.04.17
+2026.04.18 10:14:42.682	GOLD#,M1: history cache allocated for 386006 bars and contains 354978 bars from 2024.01.02 01:00 to 2024.12.31 20:00
+2026.04.18 10:14:42.682	GOLD#,M1: history begins from 2024.01.02 01:00
+2026.04.18 10:14:42.685	GOLD#,M1 (XMGlobal-MT5 6): OHLC bar states generating. OnTick executed on the bar begin only
+2026.04.18 10:14:42.685	GOLD#,M1: testing of Experts\NO HEDGE MAX DRAWDOWN.ex5 from 2025.01.01 00:00 to 2025.01.31 00:00 started with inputs:
+2026.04.18 10:14:42.685	  EA_Name=MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD) 
+2026.04.18 10:14:42.685	  LotSize=0.1
+2026.04.18 10:14:42.685	  StopLossPips=25000
+2026.04.18 10:14:42.685	  TakeProfitPips=25000
+2026.04.18 10:14:42.685	  MAFastPeriod=2
+2026.04.18 10:14:42.685	  MAFastMethod=1
+2026.04.18 10:14:42.685	  MAFastPrice=1
+2026.04.18 10:14:42.685	  MASlowPeriod=5
+2026.04.18 10:14:42.685	  MASlowMethod=0
+2026.04.18 10:14:42.685	  MASlowPrice=1
+2026.04.18 10:14:42.685	  MagicNumber=17635
+2026.04.18 10:14:42.685	  EnableAlerts=false
+2026.04.18 10:14:42.685	  EnableNotifications=false
+2026.04.18 10:14:42.685	  EnableEmail=false
+2026.04.18 10:14:42.685	  UseTrailingStop=true
+2026.04.18 10:14:42.685	  TrailingStartPips=5000.0
+2026.04.18 10:14:42.685	  TrailingStepPips=20
+2026.04.18 10:14:42.685	  UseBreakEven=true
+2026.04.18 10:14:42.685	  BreakEvenTriggerPips=1000
+2026.04.18 10:14:42.685	  BreakEvenPlusPips=500.0
+2026.04.18 10:14:42.685	  MaxPairs=1
+2026.04.18 10:14:42.685	  TradesPerSignal=1
+2026.04.18 10:14:42.685	  UseSessionFilter=false
+2026.04.18 10:14:42.685	  LondonOpenHour=8
+2026.04.18 10:14:42.685	  NYCloseHour=22
+2026.04.18 10:14:42.685	  DebugMode=true
+2026.04.18 10:14:42.685	  MaxDrawdownPercent=20.0
+2026.04.18 10:14:42.703	2025.01.01 00:00:00   MA Crossover EA - Simple Edition (No Hedge/Recovery/EOD) : Init v3.00
+
+JAN +163 FEB +214 MARCH -2162 APRIL +1369 MAY -2824 JUNE +376 JULY +226 AUGUST-489 SEPT-741 OCT -2415 NOV +320 DECEMBER -1733  JAN 2026 -6985 FEB 2026 -1056 MARCH 2026  +4429
+
+
+MARCH 2025 AND 2026 ARE THE BEST PERFORMING MONTHS WITH THE TWO DIFFRENT SETTINGS.  
+
