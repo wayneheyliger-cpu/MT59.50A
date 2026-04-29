@@ -1386,6 +1386,7 @@ void PartialCloseBasket(long typeFilter, string reason)
             datetime tmpD = times[a];  times[a]   = times[b];   times[b]   = tmpD;
          }
 
+   if(InpPartialClosePercent <= 0.0) return;
    int closeCount = (int)MathMax(1, MathRound((double)total * InpPartialClosePercent / 100.0));
 
    for(int i = 0; i < closeCount; i++)
@@ -1892,6 +1893,9 @@ int OnInit()
 
    if(InpUseBiasFilter)
       hBiasEMA = iMA(_Symbol, InpBiasTF, InpBiasEMA, 0, MODE_EMA, PRICE_CLOSE);
+
+   if(InpBurstLotScale <= 0.0)
+      Print(InpEAName, ": WARNING InpBurstLotScale <= 0 — defaulting to flat sizing (1.0).");
 
    if(hTrendFast   == INVALID_HANDLE ||
       hTrendSlow   == INVALID_HANDLE ||
